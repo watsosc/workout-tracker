@@ -1,0 +1,1740 @@
+from __future__ import annotations
+
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import datetime
+import enum
+
+import strawberry
+from sqlalchemy import and_, delete, func, select, update
+
+from .config import DEFAULT_USER_NAME
+from .db import db_session
+from .models import (
+    Exercise,
+    ExerciseBaseline,
+    ExerciseTier,
+    Plan,
+    PlanRun,
+    PlanRunBaseline,
+    PlanRunStatus,
+    PlanWorkout,
+    PlanWorkoutExercise,
+    ProgressionProtocol,
+    ProgressionType,
+    ResetEvent,
+    RunExerciseState,
+    SessionExerciseEntry,
+    SessionSet,
+    User,
+    WorkoutSession,
+    WorkoutSessionStatus,
+)
+from .progression import (
+    DEFAULT_WEIGHT_INCREMENT_KG,
+    evaluate_progression,
+    exercise_prescription,
+    initial_weight_for_template,
+)
+
+DEFAULT_USER_ID = 1
+
+
+@strawberry.enum
+class GQLProgressionType(enum.Enum):
+    NONE = "NONE"
+    LINEAR_KG = "LINEAR_KG"
+    PERCENT_1RM = "PERCENT_1RM"
+
+
+@strawberry.enum
+class GQLProgressionProtocol(enum.Enum):
+    BASIC = "BASIC"
+    GZCLP_T1 = "GZCLP_T1"
+    GZCLP_T2 = "GZCLP_T2"
+    GZCLP_T3 = "GZCLP_T3"
+
+
+@strawberry.enum
+class GQLExerciseTier(enum.Enum):
+    T1 = "T1"
+    T2 = "T2"
+    T3 = "T3"
+
+
+@strawberry.enum
+class GQLWorkoutSessionStatus(enum.Enum):
+    IN_PROGRESS = "IN_PROGRESS"
+    COMPLETED = "COMPLETED"
+    CANCELLED = "CANCELLED"
+
+
+@strawberry.type
+class ExerciseType:
+    id: int
+    name: str
+
+
+@strawberry.type
+class BaselineType:
+    exercise_id: int
+    exercise_name: str
+    baseline_1rm_kg: float
+
+
+@strawberry.type
+class CurrentStatusType:
+    plan_run_id: int
+    plan_name: str
+    week: int
+    workout_index: int
+    last_workout_at: datetime | None
+    days_since_last_workout: int | None
+    needs_new_1rm_exercises: list[str]
+
+
+@strawberry.type
+class DashboardType:
+    status: CurrentStatusType | None
+    baselines: list[BaselineType]
+    reset_baselines: list[BaselineType]
+
+
+@strawberry.type
+class SessionSetType:
+    id: int
+    set_index: int
+    target_reps: int | None
+    is_amrap: bool
+    reps_completed: int | None
+    weight_kg: float | None
+    completed: bool
+    completed_at: datetime | None
+
+
+@strawberry.type
+class SessionExerciseEntryType:
+    id: int
+    exercise_id: int
+    exercise_name: str
+    planned_sets: int
+    planned_reps: int
+    planned_weight_kg: float
+    sets: list[SessionSetType]
+
+
+@strawberry.type
+class WorkoutSessionType:
+    id: int
+    status: GQLWorkoutSessionStatus
+    started_at: datetime
+    finished_at: datetime | None
+    entries: list[SessionExerciseEntryType]
+
+
+@strawberry.type
+class WorkoutHistoryExerciseType:
+    exercise_id: int
+    exercise_name: str
+    completed_sets: int
+    total_reps: int
+    top_weight_kg: float
+
+
+@strawberry.type
+class WorkoutHistoryItemType:
+    session_id: int
+    plan_run_id: int
+    finished_at: datetime | None
+    plan_workout_name: str
+    workout_sequence_index: int | None
+    total_sets: int
+    completed_sets: int
+    total_volume_kg: float
+    exercises: list[WorkoutHistoryExerciseType]
+
+
+@strawberry.type
+class ExerciseProgressPointType:
+    date: datetime
+    top_weight_kg: float
+    estimated_1rm_kg: float
+
+
+@strawberry.type
+class PlanExerciseType:
+    id: int
+    exercise_id: int
+    exercise_name: str
+    sets: int
+    reps: int
+    target_weight_kg: float
+    progression_type: GQLProgressionType
+    progression_protocol: GQLProgressionProtocol
+    tier: GQLExerciseTier | None
+    progression_value: float
+    training_max_ratio: float
+    amrap_last_set: bool
+
+
+@strawberry.type
+class PlanWorkoutType:
+    id: int
+    name: str
+    sequence_index: int
+    exercises: list[PlanExerciseType]
+
+
+@strawberry.type
+class ActivePlanType:
+    id: int
+    name: str
+    total_weeks: int | None
+    days_per_week: int
+    current_week: int
+    current_workout_index: int
+    workouts: list[PlanWorkoutType]
+
+
+@strawberry.input
+class SeedExerciseInput:
+    name: str
+    baseline_1rm_kg: float
+
+
+@strawberry.input
+class SeedPlanWorkoutExerciseInput:
+    exercise_name: str
+    sets: int = 3
+    reps: int = 5
+    target_weight_kg: float = 0.0
+    progression_type: GQLProgressionType = GQLProgressionType.NONE
+    progression_protocol: GQLProgressionProtocol = GQLProgressionProtocol.BASIC
+    tier: GQLExerciseTier | None = None
+    progression_value: float = 0.0
+    training_max_ratio: float | None = None
+    amrap_last_set: bool | None = None
+    weight_increment_kg: float | None = None
+
+
+@strawberry.input
+class SeedPlanWorkoutInput:
+    name: str
+    sequence_index: int
+    exercises: list[SeedPlanWorkoutExerciseInput]
+
+
+@strawberry.input
+class BaselineInput:
+    exercise_id: int
+    baseline_1rm_kg: float
+
+
+@strawberry.input
+class AddExerciseToActivePlanInput:
+    workout_sequence_index: int
+    exercise_name: str
+    baseline_1rm_kg: float | None = None
+    sets: int = 3
+    reps: int = 10
+    target_weight_kg: float = 0.0
+    progression_type: GQLProgressionType = GQLProgressionType.LINEAR_KG
+    progression_protocol: GQLProgressionProtocol = GQLProgressionProtocol.BASIC
+    tier: GQLExerciseTier | None = None
+    progression_value: float = 2.5
+    training_max_ratio: float | None = None
+    amrap_last_set: bool | None = None
+    weight_increment_kg: float | None = None
+
+
+@strawberry.type
+class MutationResult:
+    ok: bool
+    message: str
+
+
+@strawberry.type
+class SeedResult:
+    ok: bool
+    plan_id: int
+    plan_run_id: int
+
+
+@strawberry.type
+class ResetResult:
+    ok: bool
+    message: str
+    updated_exercise_count: int
+
+
+@dataclass
+class ActivePlanContext:
+    plan: Plan
+    run: PlanRun
+
+
+def _now_utc() -> datetime:
+    return datetime.utcnow()
+
+
+def _map_status(status: WorkoutSessionStatus) -> GQLWorkoutSessionStatus:
+    return GQLWorkoutSessionStatus(status.value)
+
+
+def _protocol_default_ratio(protocol: ProgressionProtocol) -> float:
+    if protocol == ProgressionProtocol.GZCLP_T1:
+        return 0.85
+    if protocol == ProgressionProtocol.GZCLP_T2:
+        return 0.65
+    return 1.0
+
+
+def _protocol_default_amrap(protocol: ProgressionProtocol) -> bool:
+    return protocol in (ProgressionProtocol.GZCLP_T1, ProgressionProtocol.GZCLP_T3)
+
+
+def _protocol_default_tier(protocol: ProgressionProtocol) -> ExerciseTier | None:
+    if protocol == ProgressionProtocol.GZCLP_T1:
+        return ExerciseTier.T1
+    if protocol == ProgressionProtocol.GZCLP_T2:
+        return ExerciseTier.T2
+    if protocol == ProgressionProtocol.GZCLP_T3:
+        return ExerciseTier.T3
+    return None
+
+
+def _get_default_user(session) -> User:
+    user = session.get(User, DEFAULT_USER_ID)
+    if user:
+        return user
+
+    user = User(id=DEFAULT_USER_ID, name=DEFAULT_USER_NAME)
+    session.add(user)
+    session.commit()
+    return user
+
+
+def _exercise_name_key(name: str) -> str:
+    return name.strip().lower()
+
+
+def _get_or_create_exercise_by_name(session, exercise_name: str) -> Exercise:
+    name = exercise_name.strip()
+    if not name:
+        raise ValueError("exercise_name must not be empty")
+
+    existing = session.scalar(
+        select(Exercise)
+        .where(func.lower(Exercise.name) == name.lower())
+        .order_by(Exercise.id.asc())
+    )
+    if existing:
+        return existing
+
+    exercise = Exercise(name=name)
+    session.add(exercise)
+    session.flush()
+    return exercise
+
+
+def _active_plan_context(session, user_id: int) -> ActivePlanContext | None:
+    run = session.scalar(
+        select(PlanRun)
+        .where(and_(PlanRun.user_id == user_id, PlanRun.status == PlanRunStatus.ACTIVE))
+        .order_by(PlanRun.id.desc())
+    )
+    if not run:
+        return None
+
+    plan = session.get(Plan, run.plan_id)
+    if not plan:
+        return None
+    return ActivePlanContext(plan=plan, run=run)
+
+
+def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSessionType:
+    entries = session.scalars(
+        select(SessionExerciseEntry)
+        .where(SessionExerciseEntry.session_id == workout_session.id)
+        .order_by(SessionExerciseEntry.id.asc())
+    ).all()
+    out_entries: list[SessionExerciseEntryType] = []
+
+    for entry in entries:
+        sets = session.scalars(
+            select(SessionSet)
+            .where(SessionSet.entry_id == entry.id)
+            .order_by(SessionSet.set_index.asc())
+        ).all()
+        exercise = session.get(Exercise, entry.exercise_id)
+        out_entries.append(
+            SessionExerciseEntryType(
+                id=entry.id,
+                exercise_id=entry.exercise_id,
+                exercise_name=exercise.name if exercise else f"Exercise {entry.exercise_id}",
+                planned_sets=entry.planned_sets,
+                planned_reps=entry.planned_reps,
+                planned_weight_kg=entry.planned_weight_kg,
+                sets=[
+                    SessionSetType(
+                        id=s.id,
+                        set_index=s.set_index,
+                        target_reps=s.target_reps,
+                        is_amrap=s.is_amrap,
+                        reps_completed=s.reps_completed,
+                        weight_kg=s.weight_kg,
+                        completed=s.completed,
+                        completed_at=s.completed_at,
+                    )
+                    for s in sets
+                ],
+            )
+        )
+
+    return WorkoutSessionType(
+        id=workout_session.id,
+        status=_map_status(workout_session.status),
+        started_at=workout_session.started_at,
+        finished_at=workout_session.finished_at,
+        entries=out_entries,
+    )
+
+
+def _get_workouts_in_plan(session, plan_id: int) -> list[PlanWorkout]:
+    return session.scalars(
+        select(PlanWorkout).where(PlanWorkout.plan_id == plan_id).order_by(PlanWorkout.sequence_index.asc())
+    ).all()
+
+
+def _get_plan_templates_for_workout(session, plan_workout_id: int) -> list[PlanWorkoutExercise]:
+    return session.scalars(
+        select(PlanWorkoutExercise)
+        .where(PlanWorkoutExercise.plan_workout_id == plan_workout_id)
+        .order_by(PlanWorkoutExercise.id.asc())
+    ).all()
+
+
+def _template_for_exercise_in_plan(
+    session,
+    plan_id: int,
+    exercise_id: int,
+) -> PlanWorkoutExercise | None:
+    return session.scalar(
+        select(PlanWorkoutExercise)
+        .join(PlanWorkout, PlanWorkout.id == PlanWorkoutExercise.plan_workout_id)
+        .where(and_(PlanWorkout.plan_id == plan_id, PlanWorkoutExercise.exercise_id == exercise_id))
+        .order_by(PlanWorkout.sequence_index.asc(), PlanWorkoutExercise.id.asc())
+    )
+
+
+def _get_baseline(session, user_id: int, exercise_id: int) -> ExerciseBaseline | None:
+    return session.scalar(
+        select(ExerciseBaseline).where(
+            and_(ExerciseBaseline.user_id == user_id, ExerciseBaseline.exercise_id == exercise_id)
+        )
+    )
+
+
+def _get_plan_run_baseline(session, plan_run_id: int, exercise_id: int) -> PlanRunBaseline | None:
+    return session.scalar(
+        select(PlanRunBaseline).where(
+            and_(PlanRunBaseline.plan_run_id == plan_run_id, PlanRunBaseline.exercise_id == exercise_id)
+        )
+    )
+
+
+def _upsert_plan_run_baseline(
+    session,
+    plan_run_id: int,
+    exercise_id: int,
+    baseline_1rm_kg: float,
+) -> PlanRunBaseline:
+    row = _get_plan_run_baseline(session, plan_run_id, exercise_id)
+    if row:
+        row.baseline_1rm_kg = baseline_1rm_kg
+        return row
+
+    row = PlanRunBaseline(
+        plan_run_id=plan_run_id,
+        exercise_id=exercise_id,
+        baseline_1rm_kg=baseline_1rm_kg,
+    )
+    session.add(row)
+    session.flush()
+    return row
+
+
+def _get_or_create_run_state(
+    session,
+    plan_run_id: int,
+    exercise_id: int,
+    tier: ExerciseTier | None,
+    default_weight: float,
+) -> RunExerciseState:
+    state = session.scalar(
+        select(RunExerciseState).where(
+            and_(
+                RunExerciseState.plan_run_id == plan_run_id,
+                RunExerciseState.exercise_id == exercise_id,
+                RunExerciseState.tier == tier,
+            )
+        )
+    )
+    if state:
+        return state
+
+    state = RunExerciseState(
+        plan_run_id=plan_run_id,
+        exercise_id=exercise_id,
+        tier=tier,
+        current_weight_kg=default_weight,
+        failure_count=0,
+        needs_new_1rm=False,
+    )
+    session.add(state)
+    session.flush()
+    return state
+
+
+def _days_since(reference: datetime | None) -> int | None:
+    if reference is None:
+        return None
+    delta = _now_utc().date() - reference.date()
+    return delta.days
+
+
+def _exercise_label(exercise_name: str, tier: ExerciseTier | None) -> str:
+    if tier is None:
+        return exercise_name
+    return f"{exercise_name} ({tier.value})"
+
+
+def _round_to_increment(weight_kg: float, increment_kg: float) -> float:
+    inc = increment_kg if increment_kg > 0 else DEFAULT_WEIGHT_INCREMENT_KG
+    steps = int((max(0.0, weight_kg) / inc) + 0.5)
+    return round(steps * inc, 3)
+
+
+def _estimated_1rm_from_sets(session_sets: list[SessionSet]) -> float | None:
+    estimates: list[float] = []
+    for s in session_sets:
+        if not s.completed:
+            continue
+        if s.reps_completed is None or s.reps_completed <= 0:
+            continue
+        if s.weight_kg is None or s.weight_kg <= 0:
+            continue
+        estimates.append(s.weight_kg * (1.0 + (s.reps_completed / 30.0)))
+
+    if not estimates:
+        return None
+    return round(max(estimates), 2)
+
+
+def _to_plan_exercise_type(session, row: PlanWorkoutExercise) -> PlanExerciseType:
+    exercise = session.get(Exercise, row.exercise_id)
+    tier = GQLExerciseTier(row.tier.value) if row.tier else None
+    return PlanExerciseType(
+        id=row.id,
+        exercise_id=row.exercise_id,
+        exercise_name=exercise.name if exercise else f"Exercise {row.exercise_id}",
+        sets=row.sets,
+        reps=row.reps,
+        target_weight_kg=row.target_weight_kg,
+        progression_type=GQLProgressionType(row.progression_type.value),
+        progression_protocol=GQLProgressionProtocol(row.progression_protocol.value),
+        tier=tier,
+        progression_value=row.progression_value,
+        training_max_ratio=row.training_max_ratio,
+        amrap_last_set=row.amrap_last_set,
+    )
+
+
+def _active_plan_type(session, user_id: int) -> ActivePlanType | None:
+    ctx = _active_plan_context(session, user_id)
+    if not ctx:
+        return None
+
+    workouts = _get_workouts_in_plan(session, ctx.plan.id)
+    out_workouts: list[PlanWorkoutType] = []
+    for workout in workouts:
+        exercise_rows = _get_plan_templates_for_workout(session, workout.id)
+        out_workouts.append(
+            PlanWorkoutType(
+                id=workout.id,
+                name=workout.name,
+                sequence_index=workout.sequence_index,
+                exercises=[_to_plan_exercise_type(session, row) for row in exercise_rows],
+            )
+        )
+
+    return ActivePlanType(
+        id=ctx.plan.id,
+        name=ctx.plan.name,
+        total_weeks=ctx.plan.total_weeks,
+        days_per_week=len(out_workouts),
+        current_week=ctx.run.current_week,
+        current_workout_index=ctx.run.current_workout_index,
+        workouts=out_workouts,
+    )
+
+
+@strawberry.type
+class Query:
+    @strawberry.field
+    def exercises(self) -> list[ExerciseType]:
+        with db_session() as session:
+            rows = session.scalars(select(Exercise).order_by(Exercise.name.asc())).all()
+            return [ExerciseType(id=r.id, name=r.name) for r in rows]
+
+    @strawberry.field
+    def active_plan(self) -> ActivePlanType | None:
+        with db_session() as session:
+            user = _get_default_user(session)
+            return _active_plan_type(session, user.id)
+
+    @strawberry.field
+    def dashboard(self) -> DashboardType:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+
+            baseline_rows = session.scalars(
+                select(ExerciseBaseline)
+                .where(ExerciseBaseline.user_id == user.id)
+                .order_by(ExerciseBaseline.exercise_id.asc())
+            ).all()
+            baselines: list[BaselineType] = []
+            for b in baseline_rows:
+                exercise = session.get(Exercise, b.exercise_id)
+                baselines.append(
+                    BaselineType(
+                        exercise_id=b.exercise_id,
+                        exercise_name=exercise.name if exercise else f"Exercise {b.exercise_id}",
+                        baseline_1rm_kg=b.baseline_1rm_kg,
+                    )
+                )
+
+            if not ctx:
+                return DashboardType(status=None, baselines=baselines, reset_baselines=[])
+
+            workouts = _get_workouts_in_plan(session, ctx.plan.id)
+
+            reset_exercise_ids: set[int] = set()
+            for workout in workouts:
+                templates = _get_plan_templates_for_workout(session, workout.id)
+                for t in templates:
+                    reset_exercise_ids.add(t.exercise_id)
+
+            reset_baselines: list[BaselineType] = []
+            for exercise_id in sorted(reset_exercise_ids):
+                run_baseline = _get_plan_run_baseline(session, ctx.run.id, exercise_id)
+                baseline_value = run_baseline.baseline_1rm_kg if run_baseline else None
+                if baseline_value is None:
+                    baseline = _get_baseline(session, user.id, exercise_id)
+                    baseline_value = baseline.baseline_1rm_kg if baseline else None
+                if baseline_value is None:
+                    continue
+                exercise = session.get(Exercise, exercise_id)
+                reset_baselines.append(
+                    BaselineType(
+                        exercise_id=exercise_id,
+                        exercise_name=exercise.name if exercise else f"Exercise {exercise_id}",
+                        baseline_1rm_kg=baseline_value,
+                    )
+                )
+
+            reset_baselines.sort(key=lambda b: b.exercise_name.lower())
+            workout_index = min(ctx.run.current_workout_index, max(len(workouts) - 1, 0))
+
+            last_workout = session.scalar(
+                select(WorkoutSession)
+                .where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        WorkoutSession.status == WorkoutSessionStatus.COMPLETED,
+                    )
+                )
+                .order_by(WorkoutSession.finished_at.desc())
+            )
+
+            needs_reset_rows = session.scalars(
+                select(RunExerciseState).where(
+                    and_(
+                        RunExerciseState.plan_run_id == ctx.run.id,
+                        RunExerciseState.needs_new_1rm.is_(True),
+                    )
+                )
+            ).all()
+            needs_reset_names: list[str] = []
+            for row in needs_reset_rows:
+                exercise = session.get(Exercise, row.exercise_id)
+                exercise_name = exercise.name if exercise else f"Exercise {row.exercise_id}"
+                needs_reset_names.append(_exercise_label(exercise_name, row.tier))
+
+            status = CurrentStatusType(
+                plan_run_id=ctx.run.id,
+                plan_name=ctx.plan.name,
+                week=ctx.run.current_week,
+                workout_index=workout_index,
+                last_workout_at=last_workout.finished_at if last_workout else None,
+                days_since_last_workout=_days_since(last_workout.finished_at if last_workout else None),
+                needs_new_1rm_exercises=needs_reset_names,
+            )
+            return DashboardType(status=status, baselines=baselines, reset_baselines=reset_baselines)
+
+    @strawberry.field
+    def active_workout_session(self) -> WorkoutSessionType | None:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ws = session.scalar(
+                select(WorkoutSession)
+                .where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        WorkoutSession.status == WorkoutSessionStatus.IN_PROGRESS,
+                    )
+                )
+                .order_by(WorkoutSession.started_at.desc())
+            )
+            if not ws:
+                return None
+            return _build_session_type(session, ws)
+
+    @strawberry.field
+    def workout_history(self, limit: int = 20) -> list[WorkoutHistoryItemType]:
+        with db_session() as session:
+            user = _get_default_user(session)
+            sessions = session.scalars(
+                select(WorkoutSession)
+                .where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        WorkoutSession.status == WorkoutSessionStatus.COMPLETED,
+                    )
+                )
+                .order_by(WorkoutSession.finished_at.desc())
+                .limit(limit)
+            ).all()
+
+            out: list[WorkoutHistoryItemType] = []
+            for s in sessions:
+                workout = session.get(PlanWorkout, s.plan_workout_id)
+                entry_rows = session.scalars(
+                    select(SessionExerciseEntry).where(SessionExerciseEntry.session_id == s.id)
+                ).all()
+                set_rows = session.scalars(
+                    select(SessionSet)
+                    .join(SessionExerciseEntry, SessionExerciseEntry.id == SessionSet.entry_id)
+                    .where(SessionExerciseEntry.session_id == s.id)
+                ).all()
+                completed_rows = [x for x in set_rows if x.completed]
+                total_volume_kg = sum((x.weight_kg or 0.0) * float(x.reps_completed or 0) for x in completed_rows)
+
+                exercise_items: list[WorkoutHistoryExerciseType] = []
+                for entry in entry_rows:
+                    entry_sets = [row for row in completed_rows if row.entry_id == entry.id]
+                    if not entry_sets:
+                        continue
+                    exercise = session.get(Exercise, entry.exercise_id)
+                    total_reps = sum(int(row.reps_completed or 0) for row in entry_sets)
+                    top_weight_kg = max((row.weight_kg or entry.planned_weight_kg) for row in entry_sets)
+                    exercise_items.append(
+                        WorkoutHistoryExerciseType(
+                            exercise_id=entry.exercise_id,
+                            exercise_name=exercise.name if exercise else f"Exercise {entry.exercise_id}",
+                            completed_sets=len(entry_sets),
+                            total_reps=total_reps,
+                            top_weight_kg=round(float(top_weight_kg), 2),
+                        )
+                    )
+
+                out.append(
+                    WorkoutHistoryItemType(
+                        session_id=s.id,
+                        plan_run_id=s.plan_run_id,
+                        finished_at=s.finished_at,
+                        plan_workout_name=workout.name if workout else f"Workout {s.plan_workout_id}",
+                        workout_sequence_index=workout.sequence_index if workout else None,
+                        total_sets=len(set_rows),
+                        completed_sets=len(completed_rows),
+                        total_volume_kg=round(total_volume_kg, 2),
+                        exercises=exercise_items,
+                    )
+                )
+
+            return out
+
+    @strawberry.field
+    def exercise_progress(self, exercise_id: int, limit: int = 50) -> list[ExerciseProgressPointType]:
+        with db_session() as session:
+            user = _get_default_user(session)
+            rows = session.execute(
+                select(SessionSet, WorkoutSession)
+                .join(SessionExerciseEntry, SessionExerciseEntry.id == SessionSet.entry_id)
+                .join(WorkoutSession, WorkoutSession.id == SessionExerciseEntry.session_id)
+                .where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        SessionExerciseEntry.exercise_id == exercise_id,
+                        SessionSet.completed.is_(True),
+                        WorkoutSession.status == WorkoutSessionStatus.COMPLETED,
+                    )
+                )
+                .order_by(WorkoutSession.finished_at.asc())
+            ).all()
+
+            grouped: dict[datetime, list[SessionSet]] = defaultdict(list)
+            for set_row, workout in rows:
+                when = workout.finished_at or workout.started_at
+                grouped[when].append(set_row)
+
+            points: list[ExerciseProgressPointType] = []
+            for when, sets in grouped.items():
+                top = max((s.weight_kg or 0.0) for s in sets)
+                best_est_1rm = max(
+                    ((s.weight_kg or 0.0) * (1.0 + ((s.reps_completed or 0) / 30.0))) for s in sets
+                )
+                points.append(
+                    ExerciseProgressPointType(
+                        date=when,
+                        top_weight_kg=round(top, 2),
+                        estimated_1rm_kg=round(best_est_1rm, 2),
+                    )
+                )
+
+            return points[-limit:]
+
+
+@strawberry.type
+class Mutation:
+    @strawberry.mutation
+    def seed_plan(
+        self,
+        plan_name: str,
+        total_weeks: int | None,
+        workouts: list[SeedPlanWorkoutInput],
+        exercises: list[SeedExerciseInput],
+        days_per_week: int | None = None,
+    ) -> SeedResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+
+            by_name: dict[str, Exercise] = {}
+            baseline_by_name: dict[str, float] = {}
+
+            for ex in exercises:
+                key = _exercise_name_key(ex.name)
+                if key in baseline_by_name and baseline_by_name[key] != ex.baseline_1rm_kg:
+                    raise ValueError(
+                        f"exercise '{ex.name.strip()}' has conflicting baseline_1rm_kg values"
+                    )
+
+                baseline_by_name[key] = ex.baseline_1rm_kg
+                exercise = _get_or_create_exercise_by_name(session, ex.name)
+                by_name[key] = exercise
+
+                baseline = _get_baseline(session, user.id, exercise.id)
+                if baseline:
+                    baseline.baseline_1rm_kg = ex.baseline_1rm_kg
+                else:
+                    session.add(
+                        ExerciseBaseline(
+                            user_id=user.id,
+                            exercise_id=exercise.id,
+                            baseline_1rm_kg=ex.baseline_1rm_kg,
+                        )
+                    )
+
+            if days_per_week is not None and days_per_week <= 0:
+                raise ValueError("days_per_week must be > 0")
+
+            if days_per_week is None:
+                days_per_week = len(workouts) if workouts else 1
+
+            if len(workouts) > days_per_week:
+                raise ValueError("days_per_week cannot be smaller than number of workouts provided")
+
+            sequence_indexes = [w.sequence_index for w in workouts]
+            if len(set(sequence_indexes)) != len(sequence_indexes):
+                raise ValueError("workout sequence_index values must be unique")
+
+            if any(idx < 0 for idx in sequence_indexes):
+                raise ValueError("workout sequence_index must be >= 0")
+
+            if any(idx >= days_per_week for idx in sequence_indexes):
+                raise ValueError("workout sequence_index must be < days_per_week")
+
+            session.execute(
+                update(Plan)
+                .where(and_(Plan.user_id == user.id, Plan.is_active.is_(True)))
+                .values(is_active=False)
+            )
+
+            plan = Plan(user_id=user.id, name=plan_name, total_weeks=total_weeks, is_active=True)
+            session.add(plan)
+            session.flush()
+
+            workout_by_index = {w.sequence_index: w for w in workouts}
+            used_exercise_ids: set[int] = set()
+
+            for index in range(days_per_week):
+                w = workout_by_index.get(index)
+                name = w.name if w and w.name.strip() else f"Day {index + 1}"
+                pw = PlanWorkout(plan_id=plan.id, name=name, sequence_index=index)
+                session.add(pw)
+                session.flush()
+
+                if not w:
+                    continue
+
+                for wex in w.exercises:
+                    key = _exercise_name_key(wex.exercise_name)
+                    ex_model = by_name.get(key)
+                    if not ex_model:
+                        ex_model = _get_or_create_exercise_by_name(session, wex.exercise_name)
+                        by_name[key] = ex_model
+
+                    protocol = ProgressionProtocol(wex.progression_protocol.value)
+                    tier = ExerciseTier(wex.tier.value) if wex.tier else _protocol_default_tier(protocol)
+                    amrap_last_set = (
+                        _protocol_default_amrap(protocol)
+                        if wex.amrap_last_set is None
+                        else wex.amrap_last_set
+                    )
+                    training_max_ratio = (
+                        _protocol_default_ratio(protocol)
+                        if wex.training_max_ratio is None
+                        else wex.training_max_ratio
+                    )
+                    weight_increment_kg = (
+                        DEFAULT_WEIGHT_INCREMENT_KG
+                        if wex.weight_increment_kg is None
+                        else wex.weight_increment_kg
+                    )
+                    if weight_increment_kg <= 0:
+                        raise ValueError("weight_increment_kg must be > 0")
+
+                    target_weight_kg = wex.target_weight_kg
+                    if protocol in (ProgressionProtocol.GZCLP_T1, ProgressionProtocol.GZCLP_T2):
+                        baseline_1rm = baseline_by_name.get(key)
+                        if baseline_1rm is None:
+                            existing_baseline = _get_baseline(session, user.id, ex_model.id)
+                            baseline_1rm = existing_baseline.baseline_1rm_kg if existing_baseline else None
+                        if baseline_1rm is None:
+                            raise ValueError(
+                                f"baseline_1rm_kg required for {wex.exercise_name} when using {protocol.value}"
+                            )
+                        target_weight_kg = max(0.0, baseline_1rm * training_max_ratio)
+
+                    target_weight_kg = _round_to_increment(target_weight_kg, weight_increment_kg)
+
+                    session.add(
+                        PlanWorkoutExercise(
+                            plan_workout_id=pw.id,
+                            exercise_id=ex_model.id,
+                            sets=wex.sets,
+                            reps=wex.reps,
+                            target_weight_kg=target_weight_kg,
+                            progression_type=ProgressionType(wex.progression_type.value),
+                            progression_protocol=protocol,
+                            tier=tier,
+                            progression_value=wex.progression_value,
+                            training_max_ratio=training_max_ratio,
+                            amrap_last_set=amrap_last_set,
+                            progression_meta={"weight_increment_kg": weight_increment_kg},
+                        )
+                    )
+                    used_exercise_ids.add(ex_model.id)
+
+            run = PlanRun(user_id=user.id, plan_id=plan.id, current_week=1, current_workout_index=0)
+            session.add(run)
+            session.flush()
+
+            for exercise_id in used_exercise_ids:
+                baseline = _get_baseline(session, user.id, exercise_id)
+                if not baseline:
+                    continue
+                _upsert_plan_run_baseline(
+                    session,
+                    plan_run_id=run.id,
+                    exercise_id=exercise_id,
+                    baseline_1rm_kg=baseline.baseline_1rm_kg,
+                )
+
+            session.commit()
+
+            return SeedResult(ok=True, plan_id=plan.id, plan_run_id=run.id)
+
+    @strawberry.mutation
+    def add_exercise_to_active_plan(self, input: AddExerciseToActivePlanInput) -> MutationResult:
+        if input.sets <= 0 or input.reps <= 0:
+            return MutationResult(ok=False, message="sets and reps must be > 0")
+        if input.target_weight_kg < 0 or input.progression_value < 0:
+            return MutationResult(ok=False, message="weights/progression must be >= 0")
+
+        protocol = ProgressionProtocol(input.progression_protocol.value)
+        requires_baseline = protocol in (ProgressionProtocol.GZCLP_T1, ProgressionProtocol.GZCLP_T2)
+        if requires_baseline and (input.baseline_1rm_kg is None or input.baseline_1rm_kg <= 0):
+            return MutationResult(ok=False, message="baseline_1rm_kg must be > 0 for GZCLP T1/T2")
+        if input.baseline_1rm_kg is not None and input.baseline_1rm_kg <= 0:
+            return MutationResult(ok=False, message="baseline_1rm_kg must be > 0")
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan. Create one first.")
+
+            workout = session.scalar(
+                select(PlanWorkout).where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkout.sequence_index == input.workout_sequence_index,
+                    )
+                )
+            )
+            if not workout:
+                return MutationResult(
+                    ok=False,
+                    message=f"Workout with sequence index {input.workout_sequence_index} not found in active plan",
+                )
+
+            tier = ExerciseTier(input.tier.value) if input.tier else _protocol_default_tier(protocol)
+            amrap_last_set = (
+                _protocol_default_amrap(protocol)
+                if input.amrap_last_set is None
+                else input.amrap_last_set
+            )
+            training_max_ratio = (
+                _protocol_default_ratio(protocol)
+                if input.training_max_ratio is None
+                else input.training_max_ratio
+            )
+            weight_increment_kg = (
+                DEFAULT_WEIGHT_INCREMENT_KG
+                if input.weight_increment_kg is None
+                else input.weight_increment_kg
+            )
+            if weight_increment_kg <= 0:
+                return MutationResult(ok=False, message="weight_increment_kg must be > 0")
+
+            exercise = _get_or_create_exercise_by_name(session, input.exercise_name)
+
+            baseline = _get_baseline(session, user.id, exercise.id)
+            if input.baseline_1rm_kg is not None:
+                if baseline:
+                    baseline.baseline_1rm_kg = input.baseline_1rm_kg
+                else:
+                    baseline = ExerciseBaseline(
+                        user_id=user.id,
+                        exercise_id=exercise.id,
+                        baseline_1rm_kg=input.baseline_1rm_kg,
+                    )
+                    session.add(baseline)
+
+            target_weight_kg = input.target_weight_kg
+            if requires_baseline:
+                baseline_value = float(input.baseline_1rm_kg or 0)
+                target_weight_kg = max(0.0, baseline_value * training_max_ratio)
+            target_weight_kg = _round_to_increment(target_weight_kg, weight_increment_kg)
+
+            session.add(
+                PlanWorkoutExercise(
+                    plan_workout_id=workout.id,
+                    exercise_id=exercise.id,
+                    sets=input.sets,
+                    reps=input.reps,
+                    target_weight_kg=target_weight_kg,
+                    progression_type=ProgressionType(input.progression_type.value),
+                    progression_protocol=protocol,
+                    tier=tier,
+                    progression_value=input.progression_value,
+                    training_max_ratio=training_max_ratio,
+                    amrap_last_set=amrap_last_set,
+                    progression_meta={"weight_increment_kg": weight_increment_kg},
+                )
+            )
+
+            _get_or_create_run_state(
+                session,
+                plan_run_id=ctx.run.id,
+                exercise_id=exercise.id,
+                tier=tier,
+                default_weight=target_weight_kg,
+            )
+
+            if not _get_plan_run_baseline(session, ctx.run.id, exercise.id):
+                baseline_value = baseline.baseline_1rm_kg if baseline else None
+                if baseline_value is not None:
+                    _upsert_plan_run_baseline(
+                        session,
+                        plan_run_id=ctx.run.id,
+                        exercise_id=exercise.id,
+                        baseline_1rm_kg=baseline_value,
+                    )
+
+            session.commit()
+            return MutationResult(ok=True, message=f"Added {exercise.name} to workout '{workout.name}'")
+
+    @strawberry.mutation
+    def add_day_to_active_plan(self, day_name: str | None = None) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan. Create one first.")
+
+            workouts = _get_workouts_in_plan(session, ctx.plan.id)
+            next_index = len(workouts)
+            name = day_name.strip() if day_name and day_name.strip() else f"Day {next_index + 1}"
+
+            session.add(PlanWorkout(plan_id=ctx.plan.id, name=name, sequence_index=next_index))
+            session.commit()
+            return MutationResult(ok=True, message=f"Added {name}")
+
+    @strawberry.mutation
+    def remove_day_from_active_plan(self, sequence_index: int) -> MutationResult:
+        if sequence_index < 0:
+            return MutationResult(ok=False, message="sequence_index must be >= 0")
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan. Create one first.")
+
+            workouts = _get_workouts_in_plan(session, ctx.plan.id)
+            if len(workouts) <= 1:
+                return MutationResult(ok=False, message="Plan must keep at least one day")
+
+            workout = session.scalar(
+                select(PlanWorkout).where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkout.sequence_index == sequence_index,
+                    )
+                )
+            )
+            if not workout:
+                return MutationResult(ok=False, message=f"Day {sequence_index} not found")
+
+            has_exercises = session.scalar(
+                select(PlanWorkoutExercise.id).where(PlanWorkoutExercise.plan_workout_id == workout.id)
+            )
+            if has_exercises:
+                return MutationResult(
+                    ok=False,
+                    message="Day has exercises. Move them to another day before removing this day.",
+                )
+
+            removed_name = workout.name
+            session.execute(delete(PlanWorkout).where(PlanWorkout.id == workout.id))
+
+            remaining = session.scalars(
+                select(PlanWorkout)
+                .where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkout.sequence_index > sequence_index,
+                    )
+                )
+                .order_by(PlanWorkout.sequence_index.asc())
+            ).all()
+            for row in remaining:
+                row.sequence_index -= 1
+
+            run = ctx.run
+            if run.current_workout_index > sequence_index:
+                run.current_workout_index -= 1
+            elif run.current_workout_index == sequence_index:
+                run.current_workout_index = max(0, run.current_workout_index - 1)
+
+            session.commit()
+            return MutationResult(ok=True, message=f"Removed {removed_name}")
+
+    @strawberry.mutation
+    def move_exercise_to_day(
+        self,
+        plan_exercise_id: int,
+        target_workout_sequence_index: int,
+    ) -> MutationResult:
+        if target_workout_sequence_index < 0:
+            return MutationResult(ok=False, message="target_workout_sequence_index must be >= 0")
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan. Create one first.")
+
+            row = session.get(PlanWorkoutExercise, plan_exercise_id)
+            if not row:
+                return MutationResult(ok=False, message="plan_exercise_id not found")
+
+            source_workout = session.get(PlanWorkout, row.plan_workout_id)
+            if not source_workout or source_workout.plan_id != ctx.plan.id:
+                return MutationResult(ok=False, message="Exercise does not belong to active plan")
+
+            target_workout = session.scalar(
+                select(PlanWorkout).where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkout.sequence_index == target_workout_sequence_index,
+                    )
+                )
+            )
+            if not target_workout:
+                return MutationResult(
+                    ok=False,
+                    message=f"Target day {target_workout_sequence_index} not found",
+                )
+
+            if target_workout.id == source_workout.id:
+                return MutationResult(ok=True, message="Exercise already on selected day")
+
+            row.plan_workout_id = target_workout.id
+            session.commit()
+            return MutationResult(
+                ok=True,
+                message=f"Moved exercise to {target_workout.name}",
+            )
+
+    @strawberry.mutation
+    def remove_exercise_from_active_plan(self, plan_exercise_id: int) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan. Create one first.")
+
+            row = session.get(PlanWorkoutExercise, plan_exercise_id)
+            if not row:
+                return MutationResult(ok=False, message="plan_exercise_id not found")
+
+            workout = session.get(PlanWorkout, row.plan_workout_id)
+            if not workout or workout.plan_id != ctx.plan.id:
+                return MutationResult(ok=False, message="Exercise does not belong to active plan")
+
+            exercise = session.get(Exercise, row.exercise_id)
+            exercise_name = exercise.name if exercise else f"Exercise {row.exercise_id}"
+
+            same_tier_filter = (
+                PlanWorkoutExercise.tier.is_(None)
+                if row.tier is None
+                else PlanWorkoutExercise.tier == row.tier
+            )
+            state_tier_filter = (
+                RunExerciseState.tier.is_(None)
+                if row.tier is None
+                else RunExerciseState.tier == row.tier
+            )
+
+            remaining_same_tier = session.scalar(
+                select(PlanWorkoutExercise.id)
+                .join(PlanWorkout, PlanWorkout.id == PlanWorkoutExercise.plan_workout_id)
+                .where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkoutExercise.exercise_id == row.exercise_id,
+                        PlanWorkoutExercise.id != row.id,
+                        same_tier_filter,
+                    )
+                )
+            )
+            remaining_any = session.scalar(
+                select(PlanWorkoutExercise.id)
+                .join(PlanWorkout, PlanWorkout.id == PlanWorkoutExercise.plan_workout_id)
+                .where(
+                    and_(
+                        PlanWorkout.plan_id == ctx.plan.id,
+                        PlanWorkoutExercise.exercise_id == row.exercise_id,
+                        PlanWorkoutExercise.id != row.id,
+                    )
+                )
+            )
+
+            session.execute(delete(PlanWorkoutExercise).where(PlanWorkoutExercise.id == row.id))
+
+            if not remaining_same_tier:
+                session.execute(
+                    delete(RunExerciseState).where(
+                        and_(
+                            RunExerciseState.plan_run_id == ctx.run.id,
+                            RunExerciseState.exercise_id == row.exercise_id,
+                            state_tier_filter,
+                        )
+                    )
+                )
+
+            if not remaining_any:
+                session.execute(
+                    delete(PlanRunBaseline).where(
+                        and_(
+                            PlanRunBaseline.plan_run_id == ctx.run.id,
+                            PlanRunBaseline.exercise_id == row.exercise_id,
+                        )
+                    )
+                )
+
+            session.commit()
+            return MutationResult(ok=True, message=f"Removed {exercise_name} from active plan")
+
+    @strawberry.mutation
+    def delete_active_plan(self) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return MutationResult(ok=False, message="No active plan to delete")
+
+            runs = session.scalars(
+                select(PlanRun).where(PlanRun.plan_id == ctx.plan.id)
+            ).all()
+            run_ids = [r.id for r in runs]
+
+            if run_ids:
+                session_ids = session.scalars(
+                    select(WorkoutSession.id).where(WorkoutSession.plan_run_id.in_(run_ids))
+                ).all()
+            else:
+                session_ids = []
+
+            if session_ids:
+                entry_ids = session.scalars(
+                    select(SessionExerciseEntry.id).where(SessionExerciseEntry.session_id.in_(session_ids))
+                ).all()
+            else:
+                entry_ids = []
+
+            if entry_ids:
+                session.execute(delete(SessionSet).where(SessionSet.entry_id.in_(entry_ids)))
+                session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
+
+            if session_ids:
+                session.execute(delete(WorkoutSession).where(WorkoutSession.id.in_(session_ids)))
+
+            if run_ids:
+                session.execute(delete(RunExerciseState).where(RunExerciseState.plan_run_id.in_(run_ids)))
+                session.execute(delete(PlanRunBaseline).where(PlanRunBaseline.plan_run_id.in_(run_ids)))
+                session.execute(delete(ResetEvent).where(ResetEvent.plan_run_id.in_(run_ids)))
+                session.execute(delete(PlanRun).where(PlanRun.id.in_(run_ids)))
+
+            workout_ids = session.scalars(
+                select(PlanWorkout.id).where(PlanWorkout.plan_id == ctx.plan.id)
+            ).all()
+            if workout_ids:
+                session.execute(
+                    delete(PlanWorkoutExercise).where(PlanWorkoutExercise.plan_workout_id.in_(workout_ids))
+                )
+                session.execute(delete(PlanWorkout).where(PlanWorkout.id.in_(workout_ids)))
+
+            session.execute(delete(Plan).where(Plan.id == ctx.plan.id))
+            session.commit()
+            return MutationResult(ok=True, message=f"Deleted plan '{ctx.plan.name}'")
+
+    @strawberry.mutation
+    def start_workout(self, plan_workout_id: int | None = None) -> WorkoutSessionType:
+        with db_session() as session:
+            user = _get_default_user(session)
+
+            existing = session.scalar(
+                select(WorkoutSession)
+                .where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        WorkoutSession.status == WorkoutSessionStatus.IN_PROGRESS,
+                    )
+                )
+                .order_by(WorkoutSession.started_at.desc())
+            )
+            if existing:
+                return _build_session_type(session, existing)
+
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                raise ValueError("No active plan run found. Seed a plan first.")
+
+            workouts = _get_workouts_in_plan(session, ctx.plan.id)
+            if not workouts:
+                raise ValueError("Active plan has no workouts.")
+
+            if plan_workout_id is not None:
+                workout = session.get(PlanWorkout, plan_workout_id)
+                if workout is None or workout.plan_id != ctx.plan.id:
+                    raise ValueError("plan_workout_id not in active plan")
+            else:
+                workout_index = ctx.run.current_workout_index
+                if workout_index >= len(workouts):
+                    workout_index = 0
+                workout = workouts[workout_index]
+
+            templates = _get_plan_templates_for_workout(session, workout.id)
+
+            needs_reset_exercises: list[str] = []
+            for t in templates:
+                baseline = _get_baseline(session, user.id, t.exercise_id)
+                default_weight = initial_weight_for_template(
+                    t,
+                    baseline.baseline_1rm_kg if baseline else None,
+                )
+                state = _get_or_create_run_state(
+                    session,
+                    plan_run_id=ctx.run.id,
+                    exercise_id=t.exercise_id,
+                    tier=t.tier,
+                    default_weight=default_weight,
+                )
+                if not state.needs_new_1rm:
+                    continue
+
+                if baseline is None:
+                    exercise = session.get(Exercise, t.exercise_id)
+                    exercise_name = exercise.name if exercise else f"Exercise {t.exercise_id}"
+                    needs_reset_exercises.append(_exercise_label(exercise_name, t.tier))
+                    continue
+
+                state.current_weight_kg = initial_weight_for_template(t, baseline.baseline_1rm_kg)
+                state.failure_count = 0
+                state.needs_new_1rm = False
+
+            if needs_reset_exercises:
+                names = ", ".join(needs_reset_exercises)
+                raise ValueError(
+                    f"Update 1RM before continuing for: {names}. "
+                    "Go to Settings and set the missing 1RM values, then start workout again."
+                )
+
+            ws = WorkoutSession(
+                user_id=user.id,
+                plan_run_id=ctx.run.id,
+                plan_workout_id=workout.id,
+                status=WorkoutSessionStatus.IN_PROGRESS,
+            )
+            session.add(ws)
+            session.flush()
+
+            for t in templates:
+                baseline = _get_baseline(session, user.id, t.exercise_id)
+                default_weight = initial_weight_for_template(
+                    t,
+                    baseline.baseline_1rm_kg if baseline else None,
+                )
+                state = _get_or_create_run_state(
+                    session,
+                    plan_run_id=ctx.run.id,
+                    exercise_id=t.exercise_id,
+                    tier=t.tier,
+                    default_weight=default_weight,
+                )
+                prescription = exercise_prescription(t, state)
+
+                entry = SessionExerciseEntry(
+                    session_id=ws.id,
+                    plan_workout_exercise_id=t.id,
+                    exercise_id=t.exercise_id,
+                    planned_sets=prescription.sets,
+                    planned_reps=prescription.reps,
+                    planned_weight_kg=state.current_weight_kg,
+                )
+                session.add(entry)
+                session.flush()
+
+                for index, item in enumerate(prescription.set_prescriptions, start=1):
+                    session.add(
+                        SessionSet(
+                            entry_id=entry.id,
+                            set_index=index,
+                            target_reps=item.target_reps,
+                            is_amrap=item.is_amrap,
+                            reps_completed=None,
+                            weight_kg=state.current_weight_kg,
+                            completed=False,
+                        )
+                    )
+
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def complete_set(
+        self,
+        session_set_id: int,
+        reps_completed: int,
+        weight_kg: float | None = None,
+    ) -> SessionSetType:
+        if reps_completed < 0:
+            raise ValueError("reps_completed must be >= 0")
+
+        with db_session() as session:
+            sset = session.get(SessionSet, session_set_id)
+            if not sset:
+                raise ValueError("session_set_id not found")
+
+            sset.reps_completed = reps_completed
+            sset.weight_kg = weight_kg if weight_kg is not None else sset.weight_kg
+            sset.completed = True
+            sset.completed_at = _now_utc()
+            session.commit()
+
+            return SessionSetType(
+                id=sset.id,
+                set_index=sset.set_index,
+                target_reps=sset.target_reps,
+                is_amrap=sset.is_amrap,
+                reps_completed=sset.reps_completed,
+                weight_kg=sset.weight_kg,
+                completed=sset.completed,
+                completed_at=sset.completed_at,
+            )
+
+    @strawberry.mutation
+    def finish_workout(self, session_id: int) -> WorkoutSessionType:
+        with db_session() as session:
+            ws = session.get(WorkoutSession, session_id)
+            if not ws:
+                raise ValueError("session_id not found")
+            if ws.status != WorkoutSessionStatus.IN_PROGRESS:
+                return _build_session_type(session, ws)
+
+            ws.status = WorkoutSessionStatus.COMPLETED
+            ws.finished_at = _now_utc()
+
+            run = session.get(PlanRun, ws.plan_run_id)
+            if not run:
+                raise ValueError("Plan run not found for workout session")
+
+            entries = session.scalars(
+                select(SessionExerciseEntry).where(SessionExerciseEntry.session_id == ws.id)
+            ).all()
+
+            for entry in entries:
+                template = session.get(PlanWorkoutExercise, entry.plan_workout_exercise_id)
+                if not template:
+                    continue
+
+                sets = session.scalars(
+                    select(SessionSet)
+                    .where(SessionSet.entry_id == entry.id)
+                    .order_by(SessionSet.set_index.asc())
+                ).all()
+
+                estimated_1rm = _estimated_1rm_from_sets(sets)
+                baseline = _get_baseline(session, ws.user_id, entry.exercise_id)
+                if estimated_1rm is not None:
+                    if baseline is None:
+                        baseline = ExerciseBaseline(
+                            user_id=ws.user_id,
+                            exercise_id=entry.exercise_id,
+                            baseline_1rm_kg=estimated_1rm,
+                        )
+                        session.add(baseline)
+                    elif estimated_1rm > baseline.baseline_1rm_kg:
+                        baseline.baseline_1rm_kg = estimated_1rm
+
+                baseline_1rm_kg = baseline.baseline_1rm_kg if baseline else None
+                state = _get_or_create_run_state(
+                    session,
+                    plan_run_id=run.id,
+                    exercise_id=entry.exercise_id,
+                    tier=template.tier,
+                    default_weight=entry.planned_weight_kg,
+                )
+
+                result = evaluate_progression(
+                    template=template,
+                    state=state,
+                    baseline_1rm_kg=baseline_1rm_kg,
+                    session_sets=sets,
+                )
+
+                if result.needs_new_1rm and baseline_1rm_kg is not None:
+                    state.current_weight_kg = initial_weight_for_template(template, baseline_1rm_kg)
+                    state.failure_count = 0
+                    state.needs_new_1rm = False
+                else:
+                    state.current_weight_kg = result.next_weight_kg
+                    state.failure_count = result.failure_count
+                    state.needs_new_1rm = result.needs_new_1rm
+
+                state.last_completed_at = _now_utc()
+
+            plan = session.get(Plan, run.plan_id)
+            workouts = _get_workouts_in_plan(session, run.plan_id)
+            if workouts:
+                run.current_workout_index += 1
+                if run.current_workout_index >= len(workouts):
+                    run.current_workout_index = 0
+                    run.current_week += 1
+
+                    if plan and plan.total_weeks is not None and run.current_week > plan.total_weeks:
+                        run.status = PlanRunStatus.COMPLETED
+                        run.completed_at = _now_utc()
+
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def set_exercise_one_rep_max(
+        self,
+        exercise_id: int,
+        one_rep_max_kg: float,
+    ) -> MutationResult:
+        if one_rep_max_kg <= 0:
+            raise ValueError("one_rep_max_kg must be > 0")
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            baseline = _get_baseline(session, user.id, exercise_id)
+            if baseline:
+                baseline.baseline_1rm_kg = one_rep_max_kg
+            else:
+                baseline = ExerciseBaseline(
+                    user_id=user.id,
+                    exercise_id=exercise_id,
+                    baseline_1rm_kg=one_rep_max_kg,
+                )
+                session.add(baseline)
+
+            ctx = _active_plan_context(session, user.id)
+            if ctx:
+                templates = session.scalars(
+                    select(PlanWorkoutExercise)
+                    .join(PlanWorkout, PlanWorkout.id == PlanWorkoutExercise.plan_workout_id)
+                    .where(
+                        and_(
+                            PlanWorkout.plan_id == ctx.plan.id,
+                            PlanWorkoutExercise.exercise_id == exercise_id,
+                        )
+                    )
+                ).all()
+
+                unique_templates: dict[tuple[int, ExerciseTier | None], PlanWorkoutExercise] = {}
+                for template in templates:
+                    key = (template.exercise_id, template.tier)
+                    unique_templates.setdefault(key, template)
+
+                for template in unique_templates.values():
+                    state = _get_or_create_run_state(
+                        session,
+                        plan_run_id=ctx.run.id,
+                        exercise_id=exercise_id,
+                        tier=template.tier,
+                        default_weight=initial_weight_for_template(template, one_rep_max_kg),
+                    )
+                    state.current_weight_kg = initial_weight_for_template(template, one_rep_max_kg)
+                    state.failure_count = 0
+                    state.needs_new_1rm = False
+
+            session.commit()
+
+            exercise = session.get(Exercise, exercise_id)
+            exercise_name = exercise.name if exercise else f"Exercise {exercise_id}"
+            return MutationResult(ok=True, message=f"Updated 1RM for {exercise_name}")
+
+    @strawberry.mutation
+    def reset_to_baseline(
+        self,
+        training_max_ratio: float = 1.0,
+        baseline_overrides: list[BaselineInput] | None = None,
+    ) -> ResetResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ctx = _active_plan_context(session, user.id)
+            if not ctx:
+                return ResetResult(ok=False, message="No active plan run to reset", updated_exercise_count=0)
+
+            if training_max_ratio <= 0:
+                return ResetResult(
+                    ok=False,
+                    message="training_max_ratio must be > 0",
+                    updated_exercise_count=0,
+                )
+
+            for item in (baseline_overrides or []):
+                if item.baseline_1rm_kg <= 0:
+                    return ResetResult(
+                        ok=False,
+                        message=f"baseline_1rm_kg must be > 0 for exercise_id={item.exercise_id}",
+                        updated_exercise_count=0,
+                    )
+
+                row = _get_baseline(session, user.id, item.exercise_id)
+                if row:
+                    row.baseline_1rm_kg = item.baseline_1rm_kg
+                else:
+                    session.add(
+                        ExerciseBaseline(
+                            user_id=user.id,
+                            exercise_id=item.exercise_id,
+                            baseline_1rm_kg=item.baseline_1rm_kg,
+                        )
+                    )
+
+                _upsert_plan_run_baseline(
+                    session,
+                    plan_run_id=ctx.run.id,
+                    exercise_id=item.exercise_id,
+                    baseline_1rm_kg=item.baseline_1rm_kg,
+                )
+
+            workouts = _get_workouts_in_plan(session, ctx.plan.id)
+            workout_ids = [w.id for w in workouts]
+            templates = session.scalars(
+                select(PlanWorkoutExercise).where(PlanWorkoutExercise.plan_workout_id.in_(workout_ids))
+            ).all()
+
+            template_by_track: dict[tuple[int, ExerciseTier | None], PlanWorkoutExercise] = {}
+            for t in templates:
+                template_by_track.setdefault((t.exercise_id, t.tier), t)
+
+            updates = 0
+            for (exercise_id, tier), template in template_by_track.items():
+                run_baseline = _get_plan_run_baseline(session, ctx.run.id, exercise_id)
+                if not run_baseline:
+                    baseline = _get_baseline(session, user.id, exercise_id)
+                    if baseline:
+                        run_baseline = _upsert_plan_run_baseline(
+                            session,
+                            plan_run_id=ctx.run.id,
+                            exercise_id=exercise_id,
+                            baseline_1rm_kg=baseline.baseline_1rm_kg,
+                        )
+
+                baseline_1rm_kg = run_baseline.baseline_1rm_kg if run_baseline else None
+                reset_weight = initial_weight_for_template(template, baseline_1rm_kg)
+
+                state = _get_or_create_run_state(
+                    session,
+                    plan_run_id=ctx.run.id,
+                    exercise_id=exercise_id,
+                    tier=tier,
+                    default_weight=reset_weight,
+                )
+
+                state.current_weight_kg = reset_weight
+                state.failure_count = 0
+                state.needs_new_1rm = False
+                state.last_completed_at = None
+                updates += 1
+
+            ctx.run.current_week = 1
+            ctx.run.current_workout_index = 0
+
+            session.add(
+                ResetEvent(
+                    user_id=user.id,
+                    plan_run_id=ctx.run.id,
+                    training_max_ratio=training_max_ratio,
+                )
+            )
+
+            session.commit()
+            return ResetResult(
+                ok=True,
+                message="Progress reset to saved plan-start 1RM values",
+                updated_exercise_count=updates,
+            )
+
+
+schema = strawberry.Schema(query=Query, mutation=Mutation)

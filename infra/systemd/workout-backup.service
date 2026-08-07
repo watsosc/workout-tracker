@@ -1,0 +1,8 @@
+[Unit]
+Description=Workout DB backup to GCS
+
+[Service]
+Type=oneshot
+User=sean
+Environment=BUCKET=gs://REPLACE_ME
+ExecStart=/opt/workout-app/scripts/backup_sqlite_to_gcs.sh

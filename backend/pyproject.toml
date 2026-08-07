@@ -1,0 +1,27 @@
+[project]
+name = "workout-app-api"
+version = "0.1.0"
+description = "Low-cost single-user workout tracker API (GraphQL)"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi>=0.115.0",
+  "uvicorn[standard]>=0.30.0",
+  "strawberry-graphql[fastapi]>=0.267.0",
+  "sqlalchemy>=2.0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6.0",
+  "pytest>=8.3.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
