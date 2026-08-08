@@ -9,11 +9,27 @@ Goal: keep monthly cost near $0 by using free-tier eligible resources.
 - Disk: small `pd-standard` (10-20GB)
 - No load balancer
 
-## 2) Install runtime
+## 2) Bootstrap the VM (recommended)
+
+Use the bootstrap script to perform runtime install + deploy in one pass.
+
+From your local machine:
+
+```bash
+gcloud compute scp scripts/bootstrap_gce_vm.sh <VM_NAME>:~/ --zone <ZONE>
+gcloud compute ssh <VM_NAME> --zone <ZONE> --command \
+  "REPO_URL=<YOUR_REPO_URL> DOMAIN=<YOUR_DOMAIN_OR_DUCKDNS> BUCKET=gs://<YOUR_BUCKET> bash ~/bootstrap_gce_vm.sh"
+```
+
+- `REPO_URL` is required if `/opt/workout-app` does not already exist.
+- `DOMAIN` is optional but recommended for HTTPS via Caddy.
+- `BUCKET` is optional (enables backup timer setup).
+
+## 3) Install runtime (manual path)
 
 Install Python 3.11+, git, and optional Caddy/Nginx.
 
-## 3) Deploy backend
+## 4) Deploy backend (manual path)
 
 ```bash
 cd /opt/workout-app
@@ -32,7 +48,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now workout-api
 ```
 
-## 4) Deploy frontend (static)
+## 5) Deploy frontend (static)
 
 Build locally and copy `web/build/` to the VM (or build on VM):
 
@@ -52,17 +68,17 @@ workout.example.com {
   root * /opt/workout-app/web/build
   file_server
 
-  handle_path /graphql* {
+  handle /graphql* {
     reverse_proxy 127.0.0.1:8080
   }
 
-  handle_path /health {
+  handle /health {
     reverse_proxy 127.0.0.1:8080
   }
 }
 ```
 
-## 5) Daily SQLite backup
+## 6) Daily SQLite backup
 
 Use provided backup script:
 
@@ -77,14 +93,14 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now workout-backup.timer
 ```
 
-## 6) Cost guardrails
+## 7) Cost guardrails
 
 - Set budget alerts at `$1` and `$5`
 - Avoid Cloud SQL and load balancer for MVP
 - Keep network egress low
 - Remove unused static IPs/resources
 
-## 7) Upgrade path
+## 8) Upgrade path
 
 When adding multi-user auth and more traffic:
 1. Move DB to Postgres (Cloud SQL or self-managed)

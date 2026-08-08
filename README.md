@@ -179,7 +179,30 @@ Recommended MVP deploy model:
 - Backend via systemd on localhost port `8080`
 - Static frontend served by Caddy/Nginx
 - Reverse proxy `/graphql` and `/health` to backend
-- Daily SQLite backup to GCS via systemd timer
+- Optional daily SQLite backup to GCS via systemd timer
+
+### First-time VM bootstrap
+
+Use:
+- `scripts/bootstrap_gce_vm.sh` (run on VM)
+
+### Ongoing deploys (similar to baseball workflow)
+
+Use:
+- `scripts/deploy_gce.sh` (run locally; copies+executes remote deploy script)
+- `scripts/deploy_vm_update.sh` (run on VM directly)
+
+Example redeploy from local machine:
+
+```bash
+./scripts/deploy_gce.sh
+```
+
+With explicit target/branch:
+
+```bash
+VM_NAME=workout-tracker ZONE=us-central1-a BRANCH=main ./scripts/deploy_gce.sh
+```
 
 See full steps:
 - `docs/deploy-gcp-low-cost.md`
