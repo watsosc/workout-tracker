@@ -111,6 +111,8 @@
 	let draggedCustom = $state<{ sourceDayId: string; exerciseId: string } | null>(null);
 	let customDropTarget = $state<DayDropState | null>(null);
 	let customDropExerciseTarget = $state<ExerciseDropState | null>(null);
+	let gzclpStartWeightFocus = $state<Record<string, boolean>>({});
+	let gzclpStartWeightDraft = $state<Record<string, string>>({});
 	let draggedActive = $state<{ sourceDayIndex: number; exerciseId: number } | null>(null);
 	let activeDropTarget = $state<ActiveDayDropState | null>(null);
 	let activeDropExerciseTarget = $state<ActiveExerciseDropState | null>(null);
@@ -290,6 +292,14 @@
 		return String(Number(roundDisplayWeightToValidStep(baseline * ratio).toFixed(2)));
 	}
 
+	function displayedGzclpStartWeight(exercise: GzclpExerciseDraft): string {
+		if (exercise.tier === 'T3') return exercise.startWeight;
+		if (gzclpStartWeightFocus[exercise.id]) {
+			return gzclpStartWeightDraft[exercise.id] ?? computedStartWeightKg(exercise);
+		}
+		return computedStartWeightKg(exercise);
+	}
+
 	function setGzclpStartWeight(dayId: string, exerciseId: string, startWeight: string) {
 		const sourceDay = gzclpDays.find((day) => day.id === dayId);
 		const sourceExercise = sourceDay?.exercises.find((exercise) => exercise.id === exerciseId);
@@ -303,10 +313,32 @@
 
 		const parsed = Number(raw);
 		if (!Number.isFinite(parsed) || parsed <= 0) return;
-		const snappedStart = roundDisplayWeightToValidStep(parsed);
 		const ratio = gzclpRatioForTier(sourceExercise.tier);
-		const computedBaseline = snappedStart / ratio;
+		const computedBaseline = parsed / ratio;
 		setGzclpBaseline(dayId, exerciseId, String(Number(computedBaseline.toFixed(2))));
+	}
+
+	function onGzclpStartWeightFocus(exercise: GzclpExerciseDraft) {
+		if (exercise.tier === 'T3') return;
+		gzclpStartWeightFocus = { ...gzclpStartWeightFocus, [exercise.id]: true };
+		gzclpStartWeightDraft = {
+			...gzclpStartWeightDraft,
+			[exercise.id]: computedStartWeightKg(exercise)
+		};
+	}
+
+	function onGzclpStartWeightInput(dayId: string, exerciseId: string, value: string) {
+		gzclpStartWeightDraft = { ...gzclpStartWeightDraft, [exerciseId]: value };
+		setGzclpStartWeight(dayId, exerciseId, value);
+	}
+
+	function onGzclpStartWeightBlur(dayId: string, exerciseId: string) {
+		const value = gzclpStartWeightDraft[exerciseId] ?? '';
+		setGzclpStartWeight(dayId, exerciseId, value);
+		gzclpStartWeightFocus = { ...gzclpStartWeightFocus, [exerciseId]: false };
+		const nextDraft = { ...gzclpStartWeightDraft };
+		delete nextDraft[exerciseId];
+		gzclpStartWeightDraft = nextDraft;
 	}
 
 	function addProtocolRequiresBaseline(protocol: Protocol): boolean {
@@ -591,6 +623,12 @@
 				? { ...day, exercises: day.exercises.filter((exercise) => exercise.id !== exerciseId) }
 				: day
 		);
+		const nextFocus = { ...gzclpStartWeightFocus };
+		delete nextFocus[exerciseId];
+		gzclpStartWeightFocus = nextFocus;
+		const nextDraft = { ...gzclpStartWeightDraft };
+		delete nextDraft[exerciseId];
+		gzclpStartWeightDraft = nextDraft;
 	}
 
 	function setGzclpExerciseTier(dayId: string, exerciseId: string, tier: Tier) {
@@ -626,6 +664,14 @@
 		}
 
 		gzclpDays = next;
+		if (tier === 'T3') {
+			const nextFocus = { ...gzclpStartWeightFocus };
+			delete nextFocus[exerciseId];
+			gzclpStartWeightFocus = nextFocus;
+			const nextDraft = { ...gzclpStartWeightDraft };
+			delete nextDraft[exerciseId];
+			gzclpStartWeightDraft = nextDraft;
+		}
 	}
 
 	function moveGzclpExerciseToDay(
@@ -1324,8 +1370,10 @@
 													type="number"
 													step="0.1"
 													min="0"
-													value={computedStartWeightKg(ex)}
-													oninput={(e) => setGzclpStartWeight(day.id, ex.id, e.currentTarget.value)}
+													value={displayedGzclpStartWeight(ex)}
+													onfocus={() => onGzclpStartWeightFocus(ex)}
+													oninput={(e) => onGzclpStartWeightInput(day.id, ex.id, e.currentTarget.value)}
+													onblur={() => onGzclpStartWeightBlur(day.id, ex.id)}
 												/>
 											</label>
 										{/if}
