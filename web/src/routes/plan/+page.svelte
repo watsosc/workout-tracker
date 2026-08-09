@@ -278,12 +278,35 @@
 		}));
 	}
 
+	function gzclpRatioForTier(tier: Tier): number {
+		return tier === 'T1' ? 0.85 : tier === 'T2' ? 0.65 : 1;
+	}
+
 	function computedStartWeightKg(exercise: GzclpExerciseDraft): string {
 		if (exercise.tier === 'T3') return exercise.startWeight;
 		const baseline = baselineForGzclpExercise(exercise);
 		if (baseline === null) return '';
-		const ratio = exercise.tier === 'T1' ? 0.85 : 0.65;
+		const ratio = gzclpRatioForTier(exercise.tier);
 		return String(Number(roundDisplayWeightToValidStep(baseline * ratio).toFixed(2)));
+	}
+
+	function setGzclpStartWeight(dayId: string, exerciseId: string, startWeight: string) {
+		const sourceDay = gzclpDays.find((day) => day.id === dayId);
+		const sourceExercise = sourceDay?.exercises.find((exercise) => exercise.id === exerciseId);
+		if (!sourceExercise || sourceExercise.tier === 'T3') return;
+
+		const raw = startWeight.trim();
+		if (!raw) {
+			setGzclpBaseline(dayId, exerciseId, '');
+			return;
+		}
+
+		const parsed = Number(raw);
+		if (!Number.isFinite(parsed) || parsed <= 0) return;
+		const snappedStart = roundDisplayWeightToValidStep(parsed);
+		const ratio = gzclpRatioForTier(sourceExercise.tier);
+		const computedBaseline = snappedStart / ratio;
+		setGzclpBaseline(dayId, exerciseId, String(Number(computedBaseline.toFixed(2))));
 	}
 
 	function addProtocolRequiresBaseline(protocol: Protocol): boolean {
@@ -1296,13 +1319,13 @@
 											</label>
 										{:else}
 											<label>
-												Start weight ({weightUnitLabel(weightUnit)}, auto)
+												Start weight ({weightUnitLabel(weightUnit)})
 												<input
 													type="number"
 													step="0.1"
 													min="0"
 													value={computedStartWeightKg(ex)}
-													readonly
+													oninput={(e) => setGzclpStartWeight(day.id, ex.id, e.currentTarget.value)}
 												/>
 											</label>
 										{/if}

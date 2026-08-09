@@ -185,7 +185,6 @@ configure_caddy() {
 	cat >"${tmp}" <<EOF
 ${SITE_HOST} {
   root * ${APP_DIR}/web/build
-  file_server
 
   handle /graphql* {
     reverse_proxy 127.0.0.1:8080
@@ -193,6 +192,11 @@ ${SITE_HOST} {
 
   handle /health {
     reverse_proxy 127.0.0.1:8080
+  }
+
+  handle {
+    try_files {path} {path}.html {path}/ /index.html
+    file_server
   }
 }
 EOF

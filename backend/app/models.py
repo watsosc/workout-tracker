@@ -49,6 +49,29 @@ class PlanRunStatus(str, enum.Enum):
     COMPLETED = "COMPLETED"
 
 
+class ExerciseCatalogSource(str, enum.Enum):
+    WGER = "WGER"
+    MANUAL = "MANUAL"
+
+
+class EquipmentType(str, enum.Enum):
+    BARBELL = "BARBELL"
+    DUMBBELL = "DUMBBELL"
+    MACHINE = "MACHINE"
+    CABLE = "CABLE"
+    BODYWEIGHT = "BODYWEIGHT"
+    KETTLEBELL = "KETTLEBELL"
+    BAND = "BAND"
+    OTHER = "OTHER"
+
+
+class ExerciseAliasKind(str, enum.Enum):
+    SOURCE_NAME = "SOURCE_NAME"
+    SHORT_NAME = "SHORT_NAME"
+    ABBREVIATION = "ABBREVIATION"
+    USER_ADDED = "USER_ADDED"
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -57,12 +80,58 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class ExerciseCatalogItem(Base):
+    __tablename__ = "exercise_catalog_items"
+    __table_args__ = (
+        UniqueConstraint("source", "source_exercise_id", name="uq_exercise_catalog_source_item"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    source: Mapped[ExerciseCatalogSource] = mapped_column(
+        Enum(ExerciseCatalogSource), default=ExerciseCatalogSource.WGER, index=True
+    )
+    source_exercise_id: Mapped[str] = mapped_column(String(64), index=True)
+    canonical_name: Mapped[str] = mapped_column(String(200))
+    name_normalized: Mapped[str] = mapped_column(String(220), index=True)
+    equipment_type: Mapped[EquipmentType] = mapped_column(Enum(EquipmentType), default=EquipmentType.OTHER)
+    movement_category: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    primary_muscle: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    raw_payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    last_synced_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class ExerciseCatalogAlias(Base):
+    __tablename__ = "exercise_catalog_aliases"
+    __table_args__ = (
+        UniqueConstraint("catalog_item_id", "alias_normalized", name="uq_catalog_alias_normalized"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    catalog_item_id: Mapped[int] = mapped_column(ForeignKey("exercise_catalog_items.id"), index=True)
+    alias: Mapped[str] = mapped_column(String(200))
+    alias_normalized: Mapped[str] = mapped_column(String(220), index=True)
+    alias_kind: Mapped[ExerciseAliasKind] = mapped_column(
+        Enum(ExerciseAliasKind), default=ExerciseAliasKind.SOURCE_NAME
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Exercise(Base):
     __tablename__ = "exercises"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
+    catalog_item_id: Mapped[int | None] = mapped_column(
+        ForeignKey("exercise_catalog_items.id"), nullable=True, index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+    catalog_item: Mapped[ExerciseCatalogItem | None] = relationship()
 
 
 class ExerciseBaseline(Base):

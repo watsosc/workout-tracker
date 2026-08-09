@@ -149,3 +149,23 @@ export type BaselineOverrideInput = {
 	exerciseId: number;
 	baseline1rmKg: number;
 };
+
+export type ExerciseEquipmentType =
+	| 'BARBELL'
+	| 'DUMBBELL'
+	| 'MACHINE'
+	| 'CABLE'
+	| 'BODYWEIGHT'
+	| 'KETTLEBELL'
+	| 'BAND'
+	| 'OTHER';
+
+export type ExerciseCatalogSource = 'WGER' | 'MANUAL';
+
+export type ExerciseCatalogMatch = {
+	catalogItemId: number;
+	canonicalName: string;
+	equipmentType: ExerciseEquipmentType;
+	matchedAlias: string;
+	source: ExerciseCatalogSource;
+};

@@ -466,3 +466,57 @@ mutation DeletePlan {
   }
 }
 ```
+
+---
+
+## 16) Exercise catalog autocomplete search
+
+```graphql
+query ExerciseCatalogSearch($query: String!, $limit: Int!) {
+  exerciseCatalogSearch(query: $query, limit: $limit) {
+    catalogItemId
+    canonicalName
+    equipmentType
+    matchedAlias
+    source
+  }
+}
+```
+
+Variables:
+
+```json
+{
+  "query": "press",
+  "limit": 12
+}
+```
+
+---
+
+## 17) Exercise catalog item + linking existing exercise
+
+```graphql
+query ExerciseCatalogItem($catalogItemId: Int!) {
+  exerciseCatalogItem(catalogItemId: $catalogItemId) {
+    id
+    source
+    sourceExerciseId
+    canonicalName
+    equipmentType
+    movementCategory
+    primaryMuscle
+  }
+}
+```
+
+```graphql
+mutation LinkExerciseToCatalog($exerciseId: Int!, $catalogItemId: Int) {
+  linkExerciseToCatalog(exerciseId: $exerciseId, catalogItemId: $catalogItemId) {
+    ok
+    message
+  }
+}
+```
+
+Set `catalogItemId` to `null` to unlink.

@@ -66,7 +66,6 @@ Example Caddyfile:
 ```caddy
 workout.example.com {
   root * /opt/workout-app/web/build
-  file_server
 
   handle /graphql* {
     reverse_proxy 127.0.0.1:8080
@@ -74,6 +73,11 @@ workout.example.com {
 
   handle /health {
     reverse_proxy 127.0.0.1:8080
+  }
+
+  handle {
+    try_files {path} {path}.html {path}/ /index.html
+    file_server
   }
 }
 ```

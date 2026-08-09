@@ -4,6 +4,7 @@ import type {
 	AddExerciseToPlanInput,
 	BaselineOverrideInput,
 	Dashboard,
+	ExerciseCatalogMatch,
 	ExerciseProgressPoint,
 	SeedExerciseInput,
 	SeedWorkoutInput,
@@ -130,6 +131,18 @@ const progressQuery = `
 	}
 `;
 
+const exerciseCatalogSearchQuery = `
+	query ExerciseCatalogSearch($query: String!, $limit: Int!) {
+		exerciseCatalogSearch(query: $query, limit: $limit) {
+			catalogItemId
+			canonicalName
+			equipmentType
+			matchedAlias
+			source
+		}
+	}
+`;
+
 const seedPlanMutation = `
 	mutation SeedPlan(
 		$planName: String!
@@ -235,6 +248,15 @@ const removeExerciseMutation = `
 	}
 `;
 
+const linkExerciseToCatalogMutation = `
+	mutation LinkExerciseToCatalog($exerciseId: Int!, $catalogItemId: Int) {
+		linkExerciseToCatalog(exerciseId: $exerciseId, catalogItemId: $catalogItemId) {
+			ok
+			message
+		}
+	}
+`;
+
 const deletePlanMutation = `
 	mutation DeletePlan {
 		deleteActivePlan {
@@ -283,6 +305,18 @@ export async function fetchExerciseProgress(
 		limit
 	});
 	return data.exerciseProgress;
+}
+
+export async function searchExerciseCatalog(
+	query: string,
+	limit = 12
+): Promise<ExerciseCatalogMatch[]> {
+	if (!query.trim()) return [];
+	const data = await gql<{ exerciseCatalogSearch: ExerciseCatalogMatch[] }>(
+		exerciseCatalogSearchQuery,
+		{ query, limit }
+	);
+	return data.exerciseCatalogSearch;
 }
 
 export async function seedPlan(input: {
@@ -336,6 +370,13 @@ export async function moveExerciseToDay(
 
 export async function removeExerciseFromActivePlan(planExerciseId: number): Promise<void> {
 	await gql(removeExerciseMutation, { planExerciseId });
+}
+
+export async function linkExerciseToCatalog(
+	exerciseId: number,
+	catalogItemId: number | null
+): Promise<void> {
+	await gql(linkExerciseToCatalogMutation, { exerciseId, catalogItemId });
 }
 
 export async function deleteActivePlan(): Promise<void> {

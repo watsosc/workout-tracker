@@ -4,16 +4,21 @@ from collections import defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 import enum
+import re
 
 import strawberry
-from sqlalchemy import and_, delete, func, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 
 from .config import DEFAULT_USER_NAME
 from .db import db_session
 from .models import (
     Exercise,
     ExerciseBaseline,
+    ExerciseCatalogAlias,
+    ExerciseCatalogItem,
+    ExerciseCatalogSource,
     ExerciseTier,
+    EquipmentType,
     Plan,
     PlanRun,
     PlanRunBaseline,
@@ -69,10 +74,48 @@ class GQLWorkoutSessionStatus(enum.Enum):
     CANCELLED = "CANCELLED"
 
 
+@strawberry.enum
+class GQLExerciseCatalogSource(enum.Enum):
+    WGER = "WGER"
+    MANUAL = "MANUAL"
+
+
+@strawberry.enum
+class GQLEquipmentType(enum.Enum):
+    BARBELL = "BARBELL"
+    DUMBBELL = "DUMBBELL"
+    MACHINE = "MACHINE"
+    CABLE = "CABLE"
+    BODYWEIGHT = "BODYWEIGHT"
+    KETTLEBELL = "KETTLEBELL"
+    BAND = "BAND"
+    OTHER = "OTHER"
+
+
 @strawberry.type
 class ExerciseType:
     id: int
     name: str
+
+
+@strawberry.type
+class ExerciseCatalogItemType:
+    id: int
+    source: GQLExerciseCatalogSource
+    source_exercise_id: str
+    canonical_name: str
+    equipment_type: GQLEquipmentType
+    movement_category: str | None
+    primary_muscle: str | None
+
+
+@strawberry.type
+class ExerciseCatalogMatchType:
+    catalog_item_id: int
+    canonical_name: str
+    equipment_type: GQLEquipmentType
+    matched_alias: str
+    source: GQLExerciseCatalogSource
 
 
 @strawberry.type
@@ -314,8 +357,53 @@ def _get_default_user(session) -> User:
     return user
 
 
+def _normalize_text(value: str) -> str:
+    value = value.strip().lower()
+    value = re.sub(r"[\-_/,]+", " ", value)
+    value = re.sub(r"\s+", " ", value)
+    return value
+
+
 def _exercise_name_key(name: str) -> str:
-    return name.strip().lower()
+    return _normalize_text(name)
+
+
+def _map_catalog_source(source: ExerciseCatalogSource) -> GQLExerciseCatalogSource:
+    return GQLExerciseCatalogSource(source.value)
+
+
+def _map_equipment_type(equipment: EquipmentType) -> GQLEquipmentType:
+    return GQLEquipmentType(equipment.value)
+
+
+def _find_catalog_item_for_name(session, exercise_name: str) -> ExerciseCatalogItem | None:
+    key = _exercise_name_key(exercise_name)
+    if not key:
+        return None
+
+    alias_match = session.scalar(
+        select(ExerciseCatalogAlias)
+        .where(
+            and_(
+                ExerciseCatalogAlias.alias_normalized == key,
+                ExerciseCatalogAlias.is_active.is_(True),
+            )
+        )
+        .order_by(ExerciseCatalogAlias.id.asc())
+    )
+    if alias_match:
+        return session.get(ExerciseCatalogItem, alias_match.catalog_item_id)
+
+    return session.scalar(
+        select(ExerciseCatalogItem)
+        .where(
+            and_(
+                ExerciseCatalogItem.name_normalized == key,
+                ExerciseCatalogItem.is_active.is_(True),
+            )
+        )
+        .order_by(ExerciseCatalogItem.id.asc())
+    )
 
 
 def _get_or_create_exercise_by_name(session, exercise_name: str) -> Exercise:
@@ -329,9 +417,14 @@ def _get_or_create_exercise_by_name(session, exercise_name: str) -> Exercise:
         .order_by(Exercise.id.asc())
     )
     if existing:
+        if existing.catalog_item_id is None:
+            catalog_item = _find_catalog_item_for_name(session, name)
+            if catalog_item:
+                existing.catalog_item_id = catalog_item.id
         return existing
 
-    exercise = Exercise(name=name)
+    catalog_item = _find_catalog_item_for_name(session, name)
+    exercise = Exercise(name=name, catalog_item_id=catalog_item.id if catalog_item else None)
     session.add(exercise)
     session.flush()
     return exercise
@@ -588,6 +681,105 @@ class Query:
             return [ExerciseType(id=r.id, name=r.name) for r in rows]
 
     @strawberry.field
+    def exercise_catalog_item(self, catalog_item_id: int) -> ExerciseCatalogItemType | None:
+        with db_session() as session:
+            row = session.get(ExerciseCatalogItem, catalog_item_id)
+            if not row or not row.is_active:
+                return None
+            return ExerciseCatalogItemType(
+                id=row.id,
+                source=_map_catalog_source(row.source),
+                source_exercise_id=row.source_exercise_id,
+                canonical_name=row.canonical_name,
+                equipment_type=_map_equipment_type(row.equipment_type),
+                movement_category=row.movement_category,
+                primary_muscle=row.primary_muscle,
+            )
+
+    @strawberry.field
+    def exercise_catalog_search(self, query: str, limit: int = 12) -> list[ExerciseCatalogMatchType]:
+        key = _exercise_name_key(query)
+        if not key:
+            return []
+
+        result_limit = max(1, min(limit, 50))
+        like_value = f"%{key}%"
+
+        with db_session() as session:
+            rows = session.execute(
+                select(ExerciseCatalogAlias, ExerciseCatalogItem)
+                .join(ExerciseCatalogItem, ExerciseCatalogItem.id == ExerciseCatalogAlias.catalog_item_id)
+                .where(
+                    and_(
+                        ExerciseCatalogAlias.is_active.is_(True),
+                        ExerciseCatalogItem.is_active.is_(True),
+                        or_(
+                            ExerciseCatalogAlias.alias_normalized.like(like_value),
+                            ExerciseCatalogItem.name_normalized.like(like_value),
+                        ),
+                    )
+                )
+                .order_by(ExerciseCatalogAlias.id.asc())
+                .limit(max(result_limit * 12, 80))
+            ).all()
+
+            scored: dict[int, tuple[tuple[int, int, str], ExerciseCatalogMatchType]] = {}
+
+            for alias, item in rows:
+                alias_key = alias.alias_normalized
+                name_key = item.name_normalized
+
+                if alias_key == key or name_key == key:
+                    score = 0
+                elif alias_key.startswith(key) or name_key.startswith(key):
+                    score = 1
+                elif f" {key}" in alias_key or f" {key}" in name_key:
+                    score = 2
+                else:
+                    score = 3
+
+                match = ExerciseCatalogMatchType(
+                    catalog_item_id=item.id,
+                    canonical_name=item.canonical_name,
+                    equipment_type=_map_equipment_type(item.equipment_type),
+                    matched_alias=alias.alias,
+                    source=_map_catalog_source(item.source),
+                )
+                rank = (score, len(alias.alias), item.canonical_name.lower())
+                previous = scored.get(item.id)
+                if previous is None or rank < previous[0]:
+                    scored[item.id] = (rank, match)
+
+            if len(scored) < result_limit:
+                fallback_items = session.scalars(
+                    select(ExerciseCatalogItem)
+                    .where(
+                        and_(
+                            ExerciseCatalogItem.is_active.is_(True),
+                            ExerciseCatalogItem.name_normalized.like(like_value),
+                        )
+                    )
+                    .order_by(ExerciseCatalogItem.canonical_name.asc())
+                    .limit(result_limit * 2)
+                ).all()
+                for item in fallback_items:
+                    if item.id in scored:
+                        continue
+                    score = 1 if item.name_normalized.startswith(key) else 3
+                    match = ExerciseCatalogMatchType(
+                        catalog_item_id=item.id,
+                        canonical_name=item.canonical_name,
+                        equipment_type=_map_equipment_type(item.equipment_type),
+                        matched_alias=item.canonical_name,
+                        source=_map_catalog_source(item.source),
+                    )
+                    rank = (score, len(item.canonical_name), item.canonical_name.lower())
+                    scored[item.id] = (rank, match)
+
+            ordered = [pair[1] for pair in sorted(scored.values(), key=lambda x: x[0])]
+            return ordered[:result_limit]
+
+    @strawberry.field
     def active_plan(self) -> ActivePlanType | None:
         with db_session() as session:
             user = _get_default_user(session)
@@ -808,6 +1000,30 @@ class Query:
 
 @strawberry.type
 class Mutation:
+    @strawberry.mutation
+    def link_exercise_to_catalog(
+        self,
+        exercise_id: int,
+        catalog_item_id: int | None,
+    ) -> MutationResult:
+        with db_session() as session:
+            exercise = session.get(Exercise, exercise_id)
+            if not exercise:
+                return MutationResult(ok=False, message="exercise_id not found")
+
+            if catalog_item_id is None:
+                exercise.catalog_item_id = None
+                session.commit()
+                return MutationResult(ok=True, message=f"Unlinked catalog item from {exercise.name}")
+
+            catalog_item = session.get(ExerciseCatalogItem, catalog_item_id)
+            if not catalog_item or not catalog_item.is_active:
+                return MutationResult(ok=False, message="catalog_item_id not found or inactive")
+
+            exercise.catalog_item_id = catalog_item.id
+            session.commit()
+            return MutationResult(ok=True, message=f"Linked {exercise.name} to {catalog_item.canonical_name}")
+
     @strawberry.mutation
     def seed_plan(
         self,

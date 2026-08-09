@@ -31,6 +31,19 @@ log() {
 	echo "[deploy-vm] $*"
 }
 
+wait_for_health() {
+	local attempts="${1:-30}"
+	local delay="${2:-1}"
+	local i
+	for ((i=1; i<=attempts; i++)); do
+		if curl -fsS --max-time 3 http://127.0.0.1:8080/health >/dev/null 2>&1; then
+			return 0
+		fi
+		sleep "${delay}"
+	done
+	return 1
+}
+
 need_cmd() {
 	if ! command -v "$1" >/dev/null 2>&1; then
 		echo "ERROR: missing command: $1" >&2
@@ -60,6 +73,11 @@ main() {
 	fi
 	"${APP_DIR}/.venv/bin/pip" install -e "${APP_DIR}/backend"
 
+	log "Applying DB schema/migrations..."
+	pushd "${APP_DIR}/backend" >/dev/null
+	DATABASE_URL="sqlite:///${APP_DIR}/backend/workout.db" "${APP_DIR}/.venv/bin/python" -c "from app.db import Base, engine, apply_sqlite_migrations; Base.metadata.create_all(bind=engine); apply_sqlite_migrations()"
+	popd >/dev/null
+
 	log "Building frontend..."
 	pushd "${APP_DIR}/web" >/dev/null
 	npm ci
@@ -80,9 +98,17 @@ main() {
 	$SUDO systemctl --no-pager --full status workout-api | sed -n '1,12p'
 	$SUDO systemctl --no-pager --full status caddy | sed -n '1,12p' || true
 
+	log "Waiting for API health..."
+	if ! wait_for_health 45 1; then
+		echo "ERROR: API did not become healthy on 127.0.0.1:8080 in time" >&2
+		$SUDO systemctl --no-pager --full status workout-api || true
+		$SUDO journalctl -u workout-api -n 120 --no-pager || true
+		exit 1
+	fi
+
 	log "Health checks..."
-	curl -fsS http://127.0.0.1:8080/health
-	curl -fsS -H 'content-type: application/json' --data '{"query":"query { __typename }"}' http://127.0.0.1:8080/graphql
+	curl -fsS --max-time 5 http://127.0.0.1:8080/health
+	curl -fsS --max-time 8 -H 'content-type: application/json' --data '{"query":"query { __typename }"}' http://127.0.0.1:8080/graphql
 
 	log "Deploy complete."
 }

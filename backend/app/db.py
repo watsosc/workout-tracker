@@ -42,6 +42,25 @@ def _sqlite_table_sql(conn, table_name: str) -> str | None:
     return row[0]
 
 
+def _sqlite_table_exists(conn, table_name: str) -> bool:
+    row = conn.exec_driver_sql(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = :name",
+        {"name": table_name},
+    ).fetchone()
+    return bool(row)
+
+
+def _migrate_exercises_catalog_item_id(conn) -> None:
+    if not _sqlite_table_exists(conn, "exercises"):
+        return
+    columns = _sqlite_table_columns(conn, "exercises")
+    if "catalog_item_id" not in columns:
+        conn.exec_driver_sql("ALTER TABLE exercises ADD COLUMN catalog_item_id INTEGER")
+    conn.exec_driver_sql(
+        "CREATE INDEX IF NOT EXISTS ix_exercises_catalog_item_id ON exercises (catalog_item_id)"
+    )
+
+
 def _migrate_run_exercise_states_tier(conn) -> None:
     columns = _sqlite_table_columns(conn, "run_exercise_states")
     if not columns:
@@ -114,6 +133,7 @@ def apply_sqlite_migrations() -> None:
         return
 
     with engine.begin() as conn:
+        _migrate_exercises_catalog_item_id(conn)
         _migrate_run_exercise_states_tier(conn)
 
 

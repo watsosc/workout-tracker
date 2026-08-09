@@ -16,6 +16,27 @@ uvicorn app.main:app --reload
 - `DATABASE_URL` (default: `sqlite:///./workout.db`)
 - `DEFAULT_USER_NAME` (currently informational)
 
+## Exercise catalog (canonical + autocomplete support)
+
+The backend now supports a canonical exercise catalog with equipment metadata.
+
+Main GraphQL fields:
+- `exerciseCatalogSearch(query:, limit:)`
+- `exerciseCatalogItem(catalogItemId:)`
+- `linkExerciseToCatalog(exerciseId:, catalogItemId:)`
+
+Sync from wger (manual run):
+
+```bash
+cd backend
+source .venv/bin/activate
+python -m app.sync_wger_catalog --page-limit 100
+```
+
+Useful flags:
+- `--max-items 200` (partial sync)
+- `--no-deactivate-missing` (do not deactivate missing source items)
+
 ## Notes
 
 - Single default user is created automatically (`id=1`).
