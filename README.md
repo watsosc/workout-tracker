@@ -174,7 +174,7 @@ Notes:
 - `/plan` create/edit plan
 - `/analytics` charts and trends
 - `/history` workout/exercise history + Strava send actions
-- `/settings` units, 1RM updates, reset actions, Strava connect/disconnect, delete plan
+- `/settings` units, 1RM updates, reset actions, Strava connect/disconnect + auto-send toggle (default off), delete plan
 
 ---
 

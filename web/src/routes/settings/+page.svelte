@@ -9,6 +9,7 @@
 		fetchStravaConnection,
 		resetToBaseline,
 		setExerciseOneRepMax,
+		setStravaAutoSendOnFinish,
 		startStravaAuth
 	} from '$lib/workout-api';
 	import type {
@@ -184,6 +185,15 @@
 		await runAction(() => disconnectStrava(), 'Disconnected Strava');
 	}
 
+	async function onToggleStravaAutoSend() {
+		if (!stravaConnection) return;
+		const enabled = !stravaConnection.autoSendOnFinish;
+		await runAction(
+			() => setStravaAutoSendOnFinish(enabled),
+			enabled ? 'Enabled auto-send to Strava after workout finish' : 'Disabled auto-send to Strava'
+		);
+	}
+
 	onMount(() => {
 		weightUnit = getPreferredWeightUnit();
 		const offWeightUnit = onWeightUnitChange((unit) => {
@@ -266,6 +276,21 @@
 		<div class="actions">
 			<button type="button" onclick={onConnectStrava} disabled={loading}>Connect Strava</button>
 		</div>
+	{/if}
+
+	{#if stravaConnection}
+		<label class="toggle-row">
+			<input
+				type="checkbox"
+				checked={stravaConnection.autoSendOnFinish}
+				onchange={onToggleStravaAutoSend}
+				disabled={loading || !stravaConnection.configured}
+			/>
+			<span>Auto-send completed workouts to Strava</span>
+		</label>
+		<p class="subtle">
+			Default: off. When enabled, each workout attempts a Strava export right after finish.
+		</p>
 	{/if}
 </section>
 
@@ -381,6 +406,13 @@
 		display: flex;
 		gap: 0.6rem;
 		flex-wrap: wrap;
+	}
+
+	.toggle-row {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-top: 0.8rem;
 	}
 
 	.baseline-grid {

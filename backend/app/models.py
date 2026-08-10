@@ -90,6 +90,17 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    __table_args__ = (UniqueConstraint("user_id", name="uq_user_preferences_user_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    strava_auto_send_on_finish: Mapped[bool] = mapped_column(Boolean, default=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class OAuthConnection(Base):
     __tablename__ = "oauth_connections"
     __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_oauth_provider"),)

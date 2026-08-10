@@ -87,6 +87,7 @@ const stravaConnectionQuery = `
 			athleteUsername
 			scope
 			expiresAt
+			autoSendOnFinish
 		}
 	}
 `;
@@ -332,6 +333,15 @@ const sendWorkoutToStravaMutation = `
 	}
 `;
 
+const setStravaAutoSendOnFinishMutation = `
+	mutation SetStravaAutoSendOnFinish($enabled: Boolean!) {
+		setStravaAutoSendOnFinish(enabled: $enabled) {
+			ok
+			message
+		}
+	}
+`;
+
 const deletePlanMutation = `
 	mutation DeletePlan {
 		deleteActivePlan {
@@ -433,6 +443,14 @@ export async function sendWorkoutToStrava(sessionId: number): Promise<StravaSend
 		sessionId
 	});
 	return data.sendWorkoutToStrava;
+}
+
+export async function setStravaAutoSendOnFinish(enabled: boolean): Promise<void> {
+	const data = await gql<{ setStravaAutoSendOnFinish: MutationResult }>(
+		setStravaAutoSendOnFinishMutation,
+		{ enabled }
+	);
+	if (!data.setStravaAutoSendOnFinish.ok) throw new Error(data.setStravaAutoSendOnFinish.message);
 }
 
 export async function completeSet(input: {

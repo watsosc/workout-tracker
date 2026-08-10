@@ -545,6 +545,7 @@ query StravaConnection {
     athleteUsername
     scope
     expiresAt
+    autoSendOnFinish
   }
 }
 ```
@@ -576,7 +577,20 @@ mutation ConnectStrava($code: String!, $state: String!) {
 
 ---
 
-## 20) Send completed workout to Strava
+## 20) Toggle auto-send on workout finish (default: off)
+
+```graphql
+mutation SetStravaAutoSendOnFinish($enabled: Boolean!) {
+  setStravaAutoSendOnFinish(enabled: $enabled) {
+    ok
+    message
+  }
+}
+```
+
+---
+
+## 21) Send completed workout to Strava
 
 ```graphql
 mutation SendWorkoutToStrava($sessionId: Int!) {
@@ -591,7 +605,7 @@ mutation SendWorkoutToStrava($sessionId: Int!) {
 
 ---
 
-## 21) Disconnect Strava
+## 22) Disconnect Strava
 
 ```graphql
 mutation DisconnectStrava {

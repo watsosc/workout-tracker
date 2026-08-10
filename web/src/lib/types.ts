@@ -188,6 +188,7 @@ export type StravaConnection = {
 	athleteUsername: string | null;
 	scope: string | null;
 	expiresAt: string | null;
+	autoSendOnFinish: boolean;
 };
 
 export type StravaAuthStart = {

@@ -36,6 +36,7 @@ from .models import (
     SessionExerciseEntry,
     SessionSet,
     User,
+    UserPreference,
     WorkoutExport,
     WorkoutExportStatus,
     WorkoutSession,
@@ -349,6 +350,7 @@ class StravaConnectionType:
     athlete_username: str | None
     scope: str | None
     expires_at: datetime | None
+    auto_send_on_finish: bool
 
 
 @strawberry.type
@@ -424,6 +426,17 @@ def _ensure_utc(dt: datetime) -> datetime:
 
 def _strava_activity_url(activity_id: str) -> str:
     return f"https://www.strava.com/activities/{activity_id}"
+
+
+def _get_or_create_user_preference(session, user_id: int) -> UserPreference:
+    pref = session.scalar(select(UserPreference).where(UserPreference.user_id == user_id))
+    if pref:
+        return pref
+
+    pref = UserPreference(user_id=user_id, strava_auto_send_on_finish=False)
+    session.add(pref)
+    session.flush()
+    return pref
 
 
 def _get_oauth_connection(
@@ -593,6 +606,97 @@ def _build_strava_activity_payload(session, workout_session: WorkoutSession) -> 
         "trainer": 1,
         "commute": 0,
     }
+
+
+def _send_workout_to_strava_with_session(
+    session,
+    user_id: int,
+    workout_session: WorkoutSession,
+) -> StravaSendResult:
+    if workout_session.status != WorkoutSessionStatus.COMPLETED:
+        return StravaSendResult(
+            ok=False,
+            message="Workout session must be completed before export",
+            activity_id=None,
+            activity_url=None,
+        )
+
+    if not is_strava_configured():
+        return StravaSendResult(
+            ok=False,
+            message="Strava is not configured on the server",
+            activity_id=None,
+            activity_url=None,
+        )
+
+    connection = _get_oauth_connection(session, user_id, OAuthProvider.STRAVA)
+    if not connection:
+        return StravaSendResult(
+            ok=False,
+            message="Strava is not connected",
+            activity_id=None,
+            activity_url=None,
+        )
+
+    export_row = session.scalar(
+        select(WorkoutExport).where(
+            and_(
+                WorkoutExport.provider == OAuthProvider.STRAVA,
+                WorkoutExport.session_id == workout_session.id,
+            )
+        )
+    )
+    if export_row and export_row.status == WorkoutExportStatus.SENT and export_row.remote_activity_id:
+        return StravaSendResult(
+            ok=True,
+            message="Workout already sent to Strava",
+            activity_id=export_row.remote_activity_id,
+            activity_url=export_row.remote_activity_url,
+        )
+
+    if not export_row:
+        export_row = WorkoutExport(
+            user_id=user_id,
+            session_id=workout_session.id,
+            provider=OAuthProvider.STRAVA,
+            status=WorkoutExportStatus.PENDING,
+        )
+        session.add(export_row)
+
+    payload = _build_strava_activity_payload(session, workout_session)
+
+    try:
+        access_token = _ensure_strava_access_token(session, user_id, connection)
+        response = create_activity(access_token, payload)
+        activity_id_raw = response.get("id")
+        if activity_id_raw is None:
+            raise StravaError("Strava response missing activity id")
+        activity_id = str(activity_id_raw)
+    except StravaError as exc:
+        export_row.status = WorkoutExportStatus.FAILED
+        export_row.last_error = str(exc)[:780]
+        export_row.payload_json = payload
+        session.commit()
+        return StravaSendResult(
+            ok=False,
+            message=f"Failed to send workout: {exc}",
+            activity_id=None,
+            activity_url=None,
+        )
+
+    export_row.status = WorkoutExportStatus.SENT
+    export_row.remote_activity_id = activity_id
+    export_row.remote_activity_url = _strava_activity_url(activity_id)
+    export_row.payload_json = payload
+    export_row.last_error = None
+    session.commit()
+
+    return StravaSendResult(
+        ok=True,
+        message="Workout sent to Strava",
+        activity_id=activity_id,
+        activity_url=export_row.remote_activity_url,
+    )
 
 
 def _get_default_user(session) -> User:
@@ -1052,6 +1156,7 @@ class Query:
         with db_session() as session:
             user = _get_default_user(session)
             row = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
+            pref = session.scalar(select(UserPreference).where(UserPreference.user_id == user.id))
             return StravaConnectionType(
                 configured=is_strava_configured(),
                 connected=row is not None,
@@ -1059,6 +1164,7 @@ class Query:
                 athlete_username=row.provider_username if row else None,
                 scope=row.scope if row else None,
                 expires_at=row.expires_at if row else None,
+                auto_send_on_finish=bool(pref and pref.strava_auto_send_on_finish),
             )
 
     @strawberry.field
@@ -1377,6 +1483,22 @@ class Mutation:
             return MutationResult(ok=True, message="Disconnected Strava")
 
     @strawberry.mutation
+    def set_strava_auto_send_on_finish(self, enabled: bool) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            pref = _get_or_create_user_preference(session, user.id)
+            pref.strava_auto_send_on_finish = enabled
+            session.commit()
+            return MutationResult(
+                ok=True,
+                message=(
+                    "Strava auto-send enabled"
+                    if enabled
+                    else "Strava auto-send disabled"
+                ),
+            )
+
+    @strawberry.mutation
     def send_workout_to_strava(self, session_id: int) -> StravaSendResult:
         with db_session() as session:
             user = _get_default_user(session)
@@ -1388,81 +1510,11 @@ class Mutation:
                     activity_id=None,
                     activity_url=None,
                 )
-            if workout_session.status != WorkoutSessionStatus.COMPLETED:
-                return StravaSendResult(
-                    ok=False,
-                    message="Workout session must be completed before export",
-                    activity_id=None,
-                    activity_url=None,
-                )
 
-            connection = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
-            if not connection:
-                return StravaSendResult(
-                    ok=False,
-                    message="Strava is not connected",
-                    activity_id=None,
-                    activity_url=None,
-                )
-
-            export_row = session.scalar(
-                select(WorkoutExport).where(
-                    and_(
-                        WorkoutExport.provider == OAuthProvider.STRAVA,
-                        WorkoutExport.session_id == workout_session.id,
-                    )
-                )
-            )
-            if export_row and export_row.status == WorkoutExportStatus.SENT and export_row.remote_activity_id:
-                return StravaSendResult(
-                    ok=True,
-                    message="Workout already sent to Strava",
-                    activity_id=export_row.remote_activity_id,
-                    activity_url=export_row.remote_activity_url,
-                )
-
-            if not export_row:
-                export_row = WorkoutExport(
-                    user_id=user.id,
-                    session_id=workout_session.id,
-                    provider=OAuthProvider.STRAVA,
-                    status=WorkoutExportStatus.PENDING,
-                )
-                session.add(export_row)
-
-            payload = _build_strava_activity_payload(session, workout_session)
-
-            try:
-                access_token = _ensure_strava_access_token(session, user.id, connection)
-                response = create_activity(access_token, payload)
-                activity_id_raw = response.get("id")
-                if activity_id_raw is None:
-                    raise StravaError("Strava response missing activity id")
-                activity_id = str(activity_id_raw)
-            except StravaError as exc:
-                export_row.status = WorkoutExportStatus.FAILED
-                export_row.last_error = str(exc)[:780]
-                export_row.payload_json = payload
-                session.commit()
-                return StravaSendResult(
-                    ok=False,
-                    message=f"Failed to send workout: {exc}",
-                    activity_id=None,
-                    activity_url=None,
-                )
-
-            export_row.status = WorkoutExportStatus.SENT
-            export_row.remote_activity_id = activity_id
-            export_row.remote_activity_url = _strava_activity_url(activity_id)
-            export_row.payload_json = payload
-            export_row.last_error = None
-            session.commit()
-
-            return StravaSendResult(
-                ok=True,
-                message="Workout sent to Strava",
-                activity_id=activity_id,
-                activity_url=export_row.remote_activity_url,
+            return _send_workout_to_strava_with_session(
+                session,
+                user_id=user.id,
+                workout_session=workout_session,
             )
 
     @strawberry.mutation
@@ -2259,6 +2311,16 @@ class Mutation:
                         run.completed_at = _now_utc()
 
             session.commit()
+
+            pref = session.scalar(select(UserPreference).where(UserPreference.user_id == ws.user_id))
+            should_auto_send = bool(pref and pref.strava_auto_send_on_finish)
+            if should_auto_send:
+                _send_workout_to_strava_with_session(
+                    session,
+                    user_id=ws.user_id,
+                    workout_session=ws,
+                )
+
             return _build_session_type(session, ws)
 
     @strawberry.mutation
