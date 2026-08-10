@@ -165,6 +165,7 @@ Type=simple
 User=${APP_USER}
 WorkingDirectory=${APP_DIR}
 Environment=DATABASE_URL=sqlite:///${APP_DIR}/backend/workout.db
+EnvironmentFile=-/etc/workout-api.env
 ExecStart=${APP_DIR}/.venv/bin/uvicorn app.main:app --app-dir ${APP_DIR}/backend --host 127.0.0.1 --port 8080
 Restart=on-failure
 RestartSec=5

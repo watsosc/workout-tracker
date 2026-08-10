@@ -61,6 +61,22 @@ def _migrate_exercises_catalog_item_id(conn) -> None:
     )
 
 
+def _migrate_session_sets_duration_seconds(conn) -> None:
+    if not _sqlite_table_exists(conn, "session_sets"):
+        return
+    columns = _sqlite_table_columns(conn, "session_sets")
+    if "duration_seconds" not in columns:
+        conn.exec_driver_sql("ALTER TABLE session_sets ADD COLUMN duration_seconds INTEGER")
+
+
+def _migrate_oauth_connections_provider_username(conn) -> None:
+    if not _sqlite_table_exists(conn, "oauth_connections"):
+        return
+    columns = _sqlite_table_columns(conn, "oauth_connections")
+    if "provider_username" not in columns:
+        conn.exec_driver_sql("ALTER TABLE oauth_connections ADD COLUMN provider_username VARCHAR(120)")
+
+
 def _migrate_run_exercise_states_tier(conn) -> None:
     columns = _sqlite_table_columns(conn, "run_exercise_states")
     if not columns:
@@ -134,6 +150,8 @@ def apply_sqlite_migrations() -> None:
 
     with engine.begin() as conn:
         _migrate_exercises_catalog_item_id(conn)
+        _migrate_session_sets_duration_seconds(conn)
+        _migrate_oauth_connections_provider_username(conn)
         _migrate_run_exercise_states_tier(conn)
 
 

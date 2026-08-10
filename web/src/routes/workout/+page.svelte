@@ -218,12 +218,13 @@
 			reps = Math.max(0, current.targetReps - 1);
 		}
 
-		restartSetTimer();
+		const durationSeconds = Math.max(0, timerSeconds);
 		await runAction(() =>
 			completeSet({
 				sessionSetId: current.setItem.id,
 				repsCompleted: reps,
-				weightKg: current.weightKg
+				weightKg: current.weightKg,
+				durationSeconds
 			})
 		);
 
@@ -263,6 +264,25 @@
 		return `${repTarget} Reps @ ${displayWeightFromKg(current.weightKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
 	}
 
+	function currentExpectedRestSeconds(): number {
+		const current = currentPendingSet();
+		if (!current) return 90;
+		return current.entry.expectedRestSeconds ?? 90;
+	}
+
+	function currentRestState(): 'ok' | 'warn' | 'over' {
+		const expected = currentExpectedRestSeconds();
+		if (timerSeconds > expected) return 'over';
+		if (timerSeconds >= Math.max(0, expected - 15)) return 'warn';
+		return 'ok';
+	}
+
+	function formatRestTargetLabel(seconds: number): string {
+		const mins = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+	}
+
 	onMount(() => {
 		weightUnit = getPreferredWeightUnit();
 		const offWeightUnit = onWeightUnitChange((unit) => {
@@ -299,7 +319,12 @@
 	<section class="card session-overlay">
 		<button class="exit-btn" onclick={onExitWorkoutEarly} disabled={loading}>Exit</button>
 		<div class="timer-panel">
-			<div class="segment-clock" aria-label={`Timer ${formatTimer(timerSeconds)}`}>
+			<div
+				class="segment-clock"
+				class:rest-warn={currentRestState() === 'warn'}
+				class:rest-over={currentRestState() === 'over'}
+				aria-label={`Timer ${formatTimer(timerSeconds)}`}
+			>
 				{#each formatTimer(timerSeconds).split('') as glyph}
 					{#if glyph === ':'}
 						<div class="segment-colon" aria-hidden="true">
@@ -320,6 +345,9 @@
 				{/each}
 			</div>
 		</div>
+		<p class="rest-target" class:warn={currentRestState() === 'warn'} class:over={currentRestState() === 'over'}>
+			Rest target {formatRestTargetLabel(currentExpectedRestSeconds())}
+		</p>
 		<p class="set-description">
 			<span class="set-exercise">{currentSetExerciseName()}</span>
 			{#if currentSetTargetLine()}
@@ -489,6 +517,24 @@
 		align-items: center;
 		justify-content: center;
 		gap: clamp(0.3rem, 1.8vw, 0.85rem);
+		--timer-on: #b6ff9f;
+		--timer-glow-a: rgba(182, 255, 159, 0.55);
+		--timer-glow-b: rgba(34, 197, 94, 0.45);
+		--timer-off: rgba(182, 255, 159, 0.1);
+	}
+
+	.segment-clock.rest-warn {
+		--timer-on: #f59e0b;
+		--timer-glow-a: rgba(245, 158, 11, 0.55);
+		--timer-glow-b: rgba(251, 191, 36, 0.45);
+		--timer-off: rgba(245, 158, 11, 0.12);
+	}
+
+	.segment-clock.rest-over {
+		--timer-on: #ef4444;
+		--timer-glow-a: rgba(239, 68, 68, 0.55);
+		--timer-glow-b: rgba(248, 113, 113, 0.45);
+		--timer-off: rgba(239, 68, 68, 0.13);
 	}
 
 	.segment-digit {
@@ -501,17 +547,17 @@
 
 	.seg {
 		position: absolute;
-		background: rgba(182, 255, 159, 0.1);
+		background: var(--timer-off);
 		border-radius: 999px;
 		opacity: 0.28;
 	}
 
 	.seg.on {
-		background: #b6ff9f;
+		background: var(--timer-on);
 		opacity: 1;
 		box-shadow:
-			0 0 7px rgba(182, 255, 159, 0.55),
-			0 0 14px rgba(34, 197, 94, 0.45);
+			0 0 7px var(--timer-glow-a),
+			0 0 14px var(--timer-glow-b);
 	}
 
 	.seg.a,
@@ -573,10 +619,24 @@
 		width: clamp(0.35rem, 1.8vw, 0.7rem);
 		height: clamp(0.35rem, 1.8vw, 0.7rem);
 		border-radius: 999px;
-		background: #b6ff9f;
+		background: var(--timer-on);
 		box-shadow:
-			0 0 6px rgba(182, 255, 159, 0.55),
-			0 0 12px rgba(34, 197, 94, 0.4);
+			0 0 6px var(--timer-glow-a),
+			0 0 12px var(--timer-glow-b);
+	}
+
+	.rest-target {
+		margin: 0;
+		font-size: 0.95rem;
+		color: #94a3b8;
+	}
+
+	.rest-target.warn {
+		color: #f59e0b;
+	}
+
+	.rest-target.over {
+		color: #ef4444;
 	}
 
 	.set-description {

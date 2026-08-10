@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { fetchWorkoutHistory } from '$lib/workout-api';
-	import type { WorkoutHistoryItem } from '$lib/types';
+	import { fetchStravaConnection, fetchWorkoutHistory, sendWorkoutToStrava } from '$lib/workout-api';
+	import type { StravaConnection, WorkoutHistoryItem } from '$lib/types';
 	import {
 		displayWeightFromKg,
 		formatDate,
@@ -13,8 +13,10 @@
 
 	let loading = $state(false);
 	let errorMessage = $state('');
+	let infoMessage = $state('');
 	let history = $state<WorkoutHistoryItem[]>([]);
 	let weightUnit = $state<WeightUnit>('lb');
+	let stravaConnection = $state<StravaConnection | null>(null);
 
 	function volumeLabel(valueKg: number): string {
 		return `${displayWeightFromKg(valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
@@ -22,6 +24,37 @@
 
 	function loadLabel(valueKg: number): string {
 		return `${displayWeightFromKg(valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
+	}
+
+	function formatDuration(seconds: number | null): string {
+		if (seconds === null || seconds < 0) return '—';
+		const mins = Math.floor(seconds / 60);
+		const secs = seconds % 60;
+		return `${mins}:${String(secs).padStart(2, '0')}`;
+	}
+
+	async function loadHistory() {
+		const [items, strava] = await Promise.all([fetchWorkoutHistory(120), fetchStravaConnection()]);
+		history = items;
+		stravaConnection = strava;
+	}
+
+	async function onSendToStrava(item: WorkoutHistoryItem) {
+		loading = true;
+		errorMessage = '';
+		infoMessage = '';
+		try {
+			const result = await sendWorkoutToStrava(item.sessionId);
+			if (!result.ok) throw new Error(result.message);
+			infoMessage = result.activityUrl
+				? `Sent to Strava: ${result.activityUrl}`
+				: result.message;
+			await loadHistory();
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			loading = false;
+		}
 	}
 
 	onMount(() => {
@@ -33,7 +66,7 @@
 		(async () => {
 			loading = true;
 			try {
-				history = await fetchWorkoutHistory(120);
+				await loadHistory();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
 			} finally {
@@ -52,6 +85,9 @@
 	{/if}
 	{#if errorMessage}
 		<p class="banner error">{errorMessage}</p>
+	{/if}
+	{#if infoMessage}
+		<p class="banner success">{infoMessage}</p>
 	{/if}
 
 	{#if !loading && history.length === 0}
@@ -73,6 +109,25 @@
 							<div>
 								<span class="subtle">Total volume</span>
 								<strong>{volumeLabel(item.totalVolumeKg)}</strong>
+							</div>
+							<div>
+								<span class="subtle">Workout time</span>
+								<strong>{formatDuration(item.totalDurationSeconds)}</strong>
+							</div>
+							<div class="strava-row">
+								{#if item.stravaExportStatus === 'SENT' && item.stravaActivityUrl}
+									<a href={item.stravaActivityUrl} target="_blank" rel="noreferrer">View on Strava</a>
+								{:else if stravaConnection?.connected}
+									<button
+										type="button"
+										onclick={() => onSendToStrava(item)}
+										disabled={loading || item.stravaExportStatus === 'PENDING'}
+									>
+										{item.stravaExportStatus === 'FAILED' ? 'Retry Strava' : 'Send to Strava'}
+									</button>
+								{:else}
+									<span class="subtle">Connect Strava in Settings</span>
+								{/if}
 							</div>
 						</div>
 					</header>
@@ -156,6 +211,15 @@
 		gap: 0.1rem;
 	}
 
+	.strava-row {
+		justify-items: end;
+	}
+
+	.strava-row button,
+	.strava-row a {
+		justify-self: end;
+	}
+
 	table {
 		width: 100%;
 		border-collapse: collapse;
@@ -176,6 +240,15 @@
 	@media (max-width: 740px) {
 		.history-summary {
 			text-align: left;
+		}
+
+		.strava-row {
+			justify-items: start;
+		}
+
+		.strava-row button,
+		.strava-row a {
+			justify-self: start;
 		}
 	}
 </style>

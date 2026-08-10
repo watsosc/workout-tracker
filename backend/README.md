@@ -15,6 +15,10 @@ uvicorn app.main:app --reload
 
 - `DATABASE_URL` (default: `sqlite:///./workout.db`)
 - `DEFAULT_USER_NAME` (currently informational)
+- `STRAVA_CLIENT_ID` (optional, required to enable Strava OAuth/export)
+- `STRAVA_CLIENT_SECRET` (optional, required to enable Strava OAuth/export)
+- `STRAVA_REDIRECT_URI` (optional, required to enable Strava OAuth/export)
+- `STRAVA_SCOPES` (optional, default: `activity:write,read`)
 
 ## Exercise catalog (canonical + autocomplete support)
 

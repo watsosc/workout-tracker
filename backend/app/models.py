@@ -72,11 +72,52 @@ class ExerciseAliasKind(str, enum.Enum):
     USER_ADDED = "USER_ADDED"
 
 
+class OAuthProvider(str, enum.Enum):
+    STRAVA = "STRAVA"
+
+
+class WorkoutExportStatus(str, enum.Enum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
+
+
 class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class OAuthConnection(Base):
+    __tablename__ = "oauth_connections"
+    __table_args__ = (UniqueConstraint("user_id", "provider", name="uq_user_oauth_provider"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[OAuthProvider] = mapped_column(Enum(OAuthProvider), index=True)
+    provider_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    provider_username: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    access_token: Mapped[str] = mapped_column(String(512))
+    refresh_token: Mapped[str] = mapped_column(String(512))
+    token_type: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    scope: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class OAuthState(Base):
+    __tablename__ = "oauth_states"
+    __table_args__ = (UniqueConstraint("provider", "state", name="uq_provider_oauth_state"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    provider: Mapped[OAuthProvider] = mapped_column(Enum(OAuthProvider), index=True)
+    state: Mapped[str] = mapped_column(String(120), index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -274,8 +315,28 @@ class SessionSet(Base):
     is_amrap: Mapped[bool] = mapped_column(Boolean, default=False)
     reps_completed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
+    duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     completed: Mapped[bool] = mapped_column(Boolean, default=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class WorkoutExport(Base):
+    __tablename__ = "workout_exports"
+    __table_args__ = (UniqueConstraint("provider", "session_id", name="uq_workout_export_provider_session"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("workout_sessions.id"), index=True)
+    provider: Mapped[OAuthProvider] = mapped_column(Enum(OAuthProvider), index=True)
+    status: Mapped[WorkoutExportStatus] = mapped_column(
+        Enum(WorkoutExportStatus), default=WorkoutExportStatus.PENDING
+    )
+    remote_activity_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    remote_activity_url: Mapped[str | None] = mapped_column(String(220), nullable=True)
+    payload_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(800), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
 class ResetEvent(Base):

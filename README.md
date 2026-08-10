@@ -154,10 +154,16 @@ Backend env vars:
   - Default: `sqlite:///.../backend/workout.db`
 - `DEFAULT_USER_NAME`
   - Default: `default`
+- `STRAVA_CLIENT_ID` (optional; required for Strava integration)
+- `STRAVA_CLIENT_SECRET` (optional; required for Strava integration)
+- `STRAVA_REDIRECT_URI` (optional; required for Strava integration)
+- `STRAVA_SCOPES`
+  - Default: `activity:write,read`
 
 Notes:
 - A default user (`id=1`) is auto-created at startup.
 - SQLite migrations needed for local schema drift are applied at startup.
+- On VM/systemd deploys, put secrets in `/etc/workout-api.env` (loaded via `EnvironmentFile=-/etc/workout-api.env`).
 
 ---
 
@@ -167,8 +173,8 @@ Notes:
 - `/workout` active session + workout start
 - `/plan` create/edit plan
 - `/analytics` charts and trends
-- `/history` workout/exercise history
-- `/settings` units, 1RM updates, reset actions, delete plan
+- `/history` workout/exercise history + Strava send actions
+- `/settings` units, 1RM updates, reset actions, Strava connect/disconnect, delete plan
 
 ---
 

@@ -1,13 +1,23 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		connectStrava,
 		deleteActivePlan,
+		disconnectStrava,
 		fetchActivePlan,
 		fetchDashboard,
+		fetchStravaConnection,
 		resetToBaseline,
-		setExerciseOneRepMax
+		setExerciseOneRepMax,
+		startStravaAuth
 	} from '$lib/workout-api';
-	import type { ActivePlan, Baseline, BaselineOverrideInput, DashboardStatus } from '$lib/types';
+	import type {
+		ActivePlan,
+		Baseline,
+		BaselineOverrideInput,
+		DashboardStatus,
+		StravaConnection
+	} from '$lib/types';
 	import {
 		convertKgToUnit,
 		convertUnitToKg,
@@ -31,6 +41,7 @@
 	let oneRepMaxInputs = $state<Record<number, string>>({});
 	let weightUnit = $state<WeightUnit>('lb');
 	let status = $state<DashboardStatus | null>(null);
+	let stravaConnection = $state<StravaConnection | null>(null);
 
 	function initializeResetBaselineInputs(rows: Baseline[]) {
 		const next: Record<number, string> = {};
@@ -56,13 +67,18 @@
 	}
 
 	async function loadSettings() {
-		const [plan, dashboard] = await Promise.all([fetchActivePlan(), fetchDashboard()]);
+		const [plan, dashboard, strava] = await Promise.all([
+			fetchActivePlan(),
+			fetchDashboard(),
+			fetchStravaConnection()
+		]);
 		activePlan = plan;
 		baselines = dashboard.baselines;
 		resetBaselines = dashboard.resetBaselines.length ? dashboard.resetBaselines : dashboard.baselines;
 		initializeResetBaselineInputs(resetBaselines);
 		initializeOneRepMaxInputs(dashboard.baselines);
 		status = dashboard.status;
+		stravaConnection = strava;
 	}
 
 	async function runAction(action: () => Promise<void>, msg?: string) {
@@ -113,6 +129,61 @@
 		await runAction(() => deleteActivePlan(), 'Deleted active plan');
 	}
 
+	function clearOAuthQueryParams() {
+		if (typeof window === 'undefined') return;
+		const url = new URL(window.location.href);
+		url.searchParams.delete('code');
+		url.searchParams.delete('scope');
+		url.searchParams.delete('state');
+		url.searchParams.delete('error');
+		window.history.replaceState({}, '', url.toString());
+	}
+
+	async function maybeHandleStravaCallback(): Promise<boolean> {
+		if (typeof window === 'undefined') return false;
+		const params = new URLSearchParams(window.location.search);
+		const oauthError = params.get('error');
+		const code = params.get('code');
+		const state = params.get('state');
+
+		if (!oauthError && !code && !state) return false;
+
+		if (oauthError) {
+			errorMessage = `Strava OAuth error: ${oauthError}`;
+			clearOAuthQueryParams();
+			return true;
+		}
+
+		if (!code || !state) {
+			errorMessage = 'Strava OAuth callback is missing code/state';
+			clearOAuthQueryParams();
+			return true;
+		}
+
+		await runAction(() => connectStrava(code, state), 'Connected Strava');
+		clearOAuthQueryParams();
+		return true;
+	}
+
+	async function onConnectStrava() {
+		loading = true;
+		errorMessage = '';
+		infoMessage = '';
+		try {
+			const init = await startStravaAuth();
+			if (!init.ok || !init.authUrl) throw new Error(init.message || 'Unable to start Strava OAuth');
+			window.location.assign(init.authUrl);
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : String(error);
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function onDisconnectStrava() {
+		await runAction(() => disconnectStrava(), 'Disconnected Strava');
+	}
+
 	onMount(() => {
 		weightUnit = getPreferredWeightUnit();
 		const offWeightUnit = onWeightUnitChange((unit) => {
@@ -124,7 +195,8 @@
 		(async () => {
 			loading = true;
 			try {
-				await loadSettings();
+				const handledCallback = await maybeHandleStravaCallback();
+				if (!handledCallback) await loadSettings();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
 			} finally {
@@ -170,6 +242,31 @@
 		</button>
 	</div>
 	<p class="subtle">This preference affects all displayed/input weights. Backend values are stored in kg.</p>
+</section>
+
+<section class="card">
+	<h2>Strava</h2>
+	{#if !stravaConnection}
+		<p class="subtle">Loading Strava status…</p>
+	{:else if !stravaConnection.configured}
+		<p class="subtle">
+			Strava is not configured on the server yet. Add STRAVA_CLIENT_ID, STRAVA_CLIENT_SECRET, and
+			STRAVA_REDIRECT_URI to the API service environment.
+		</p>
+	{:else if stravaConnection.connected}
+		<p class="subtle">
+			Connected{stravaConnection.athleteId ? ` (athlete ${stravaConnection.athleteId})` : ''} · token
+			expires: {formatDate(stravaConnection.expiresAt)}
+		</p>
+		<div class="actions">
+			<button type="button" onclick={onDisconnectStrava} disabled={loading}>Disconnect Strava</button>
+		</div>
+	{:else}
+		<p class="subtle">Connect Strava to post completed workouts.</p>
+		<div class="actions">
+			<button type="button" onclick={onConnectStrava} disabled={loading}>Connect Strava</button>
+		</div>
+	{/if}
 </section>
 
 <section class="card">

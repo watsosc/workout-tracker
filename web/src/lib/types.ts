@@ -61,6 +61,7 @@ export type SessionSet = {
 	isAmrap: boolean;
 	repsCompleted: number | null;
 	weightKg: number | null;
+	durationSeconds: number | null;
 	completed: boolean;
 	completedAt: string | null;
 };
@@ -72,6 +73,9 @@ export type SessionEntry = {
 	plannedSets: number;
 	plannedReps: number;
 	plannedWeightKg: number;
+	progressionProtocol: Protocol;
+	tier: 'T1' | 'T2' | 'T3' | null;
+	expectedRestSeconds: number;
 	sets: SessionSet[];
 };
 
@@ -91,6 +95,8 @@ export type WorkoutHistoryExercise = {
 	topWeightKg: number;
 };
 
+export type WorkoutExportStatus = 'PENDING' | 'SENT' | 'FAILED';
+
 export type WorkoutHistoryItem = {
 	sessionId: number;
 	planRunId: number;
@@ -100,6 +106,11 @@ export type WorkoutHistoryItem = {
 	totalSets: number;
 	completedSets: number;
 	totalVolumeKg: number;
+	totalDurationSeconds: number | null;
+	totalSetDurationSeconds: number;
+	stravaExportStatus: WorkoutExportStatus | null;
+	stravaActivityId: string | null;
+	stravaActivityUrl: string | null;
 	exercises: WorkoutHistoryExercise[];
 };
 
@@ -168,4 +179,26 @@ export type ExerciseCatalogMatch = {
 	equipmentType: ExerciseEquipmentType;
 	matchedAlias: string;
 	source: ExerciseCatalogSource;
+};
+
+export type StravaConnection = {
+	configured: boolean;
+	connected: boolean;
+	athleteId: string | null;
+	athleteUsername: string | null;
+	scope: string | null;
+	expiresAt: string | null;
+};
+
+export type StravaAuthStart = {
+	ok: boolean;
+	authUrl: string;
+	message: string;
+};
+
+export type StravaSendResult = {
+	ok: boolean;
+	message: string;
+	activityId: string | null;
+	activityUrl: string | null;
 };

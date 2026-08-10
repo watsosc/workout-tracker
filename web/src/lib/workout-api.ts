@@ -8,9 +8,17 @@ import type {
 	ExerciseProgressPoint,
 	SeedExerciseInput,
 	SeedWorkoutInput,
+	StravaAuthStart,
+	StravaConnection,
+	StravaSendResult,
 	WorkoutHistoryItem,
 	WorkoutSession
 } from '$lib/types';
+
+type MutationResult = {
+	ok: boolean;
+	message: string;
+};
 
 const dashboardQuery = `
 	query Dashboard {
@@ -70,6 +78,19 @@ const activePlanQuery = `
 	}
 `;
 
+const stravaConnectionQuery = `
+	query StravaConnection {
+		stravaConnection {
+			configured
+			connected
+			athleteId
+			athleteUsername
+			scope
+			expiresAt
+		}
+	}
+`;
+
 const activeSessionQuery = `
 	query ActiveSession {
 		activeWorkoutSession {
@@ -84,6 +105,9 @@ const activeSessionQuery = `
 				plannedSets
 				plannedReps
 				plannedWeightKg
+				progressionProtocol
+				tier
+				expectedRestSeconds
 				sets {
 					id
 					setIndex
@@ -91,6 +115,7 @@ const activeSessionQuery = `
 					isAmrap
 					repsCompleted
 					weightKg
+					durationSeconds
 					completed
 					completedAt
 				}
@@ -110,6 +135,11 @@ const historyQuery = `
 			totalSets
 			completedSets
 			totalVolumeKg
+			totalDurationSeconds
+			totalSetDurationSeconds
+			stravaExportStatus
+			stravaActivityId
+			stravaActivityUrl
 			exercises {
 				exerciseId
 				exerciseName
@@ -174,10 +204,16 @@ const startWorkoutMutation = `
 `;
 
 const completeSetMutation = `
-	mutation CompleteSet($sessionSetId: Int!, $repsCompleted: Int!, $weightKg: Float) {
-		completeSet(sessionSetId: $sessionSetId, repsCompleted: $repsCompleted, weightKg: $weightKg) {
+	mutation CompleteSet($sessionSetId: Int!, $repsCompleted: Int!, $weightKg: Float, $durationSeconds: Int) {
+		completeSet(
+			sessionSetId: $sessionSetId
+			repsCompleted: $repsCompleted
+			weightKg: $weightKg
+			durationSeconds: $durationSeconds
+		) {
 			id
 			completed
+			durationSeconds
 		}
 	}
 `;
@@ -257,6 +293,45 @@ const linkExerciseToCatalogMutation = `
 	}
 `;
 
+const startStravaAuthMutation = `
+	mutation StartStravaAuth {
+		startStravaAuth {
+			ok
+			authUrl
+			message
+		}
+	}
+`;
+
+const connectStravaMutation = `
+	mutation ConnectStrava($code: String!, $state: String!) {
+		connectStrava(code: $code, state: $state) {
+			ok
+			message
+		}
+	}
+`;
+
+const disconnectStravaMutation = `
+	mutation DisconnectStrava {
+		disconnectStrava {
+			ok
+			message
+		}
+	}
+`;
+
+const sendWorkoutToStravaMutation = `
+	mutation SendWorkoutToStrava($sessionId: Int!) {
+		sendWorkoutToStrava(sessionId: $sessionId) {
+			ok
+			message
+			activityId
+			activityUrl
+		}
+	}
+`;
+
 const deletePlanMutation = `
 	mutation DeletePlan {
 		deleteActivePlan {
@@ -284,6 +359,11 @@ export async function fetchDashboard(): Promise<Dashboard> {
 export async function fetchActivePlan(): Promise<ActivePlan | null> {
 	const data = await gql<{ activePlan: ActivePlan | null }>(activePlanQuery);
 	return data.activePlan;
+}
+
+export async function fetchStravaConnection(): Promise<StravaConnection> {
+	const data = await gql<{ stravaConnection: StravaConnection }>(stravaConnectionQuery);
+	return data.stravaConnection;
 }
 
 export async function fetchActiveSession(): Promise<WorkoutSession | null> {
@@ -333,10 +413,33 @@ export async function startWorkout(): Promise<void> {
 	await gql(startWorkoutMutation);
 }
 
+export async function startStravaAuth(): Promise<StravaAuthStart> {
+	const data = await gql<{ startStravaAuth: StravaAuthStart }>(startStravaAuthMutation);
+	return data.startStravaAuth;
+}
+
+export async function connectStrava(code: string, state: string): Promise<void> {
+	const data = await gql<{ connectStrava: MutationResult }>(connectStravaMutation, { code, state });
+	if (!data.connectStrava.ok) throw new Error(data.connectStrava.message);
+}
+
+export async function disconnectStrava(): Promise<void> {
+	const data = await gql<{ disconnectStrava: MutationResult }>(disconnectStravaMutation);
+	if (!data.disconnectStrava.ok) throw new Error(data.disconnectStrava.message);
+}
+
+export async function sendWorkoutToStrava(sessionId: number): Promise<StravaSendResult> {
+	const data = await gql<{ sendWorkoutToStrava: StravaSendResult }>(sendWorkoutToStravaMutation, {
+		sessionId
+	});
+	return data.sendWorkoutToStrava;
+}
+
 export async function completeSet(input: {
 	sessionSetId: number;
 	repsCompleted: number;
 	weightKg?: number;
+	durationSeconds?: number;
 }): Promise<void> {
 	await gql(completeSetMutation, input);
 }

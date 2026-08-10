@@ -8,6 +8,7 @@ Type=simple
 User=sean
 WorkingDirectory=/opt/workout-app
 Environment=DATABASE_URL=sqlite:////opt/workout-app/backend/workout.db
+EnvironmentFile=-/etc/workout-api.env
 ExecStart=/opt/workout-app/.venv/bin/uvicorn app.main:app --app-dir /opt/workout-app/backend --host 127.0.0.1 --port 8080
 Restart=on-failure
 RestartSec=5

@@ -246,14 +246,25 @@ query ActiveWorkoutSession {
 ## 6) Complete one set (saved immediately)
 
 ```graphql
-mutation CompleteSet($sessionSetId: Int!, $repsCompleted: Int!, $weightKg: Float) {
-  completeSet(sessionSetId: $sessionSetId, repsCompleted: $repsCompleted, weightKg: $weightKg) {
+mutation CompleteSet(
+  $sessionSetId: Int!
+  $repsCompleted: Int!
+  $weightKg: Float
+  $durationSeconds: Int
+) {
+  completeSet(
+    sessionSetId: $sessionSetId
+    repsCompleted: $repsCompleted
+    weightKg: $weightKg
+    durationSeconds: $durationSeconds
+  ) {
     id
     setIndex
     targetReps
     isAmrap
     repsCompleted
     weightKg
+    durationSeconds
     completed
     completedAt
   }
@@ -520,3 +531,73 @@ mutation LinkExerciseToCatalog($exerciseId: Int!, $catalogItemId: Int) {
 ```
 
 Set `catalogItemId` to `null` to unlink.
+
+---
+
+## 18) Strava connection status
+
+```graphql
+query StravaConnection {
+  stravaConnection {
+    configured
+    connected
+    athleteId
+    athleteUsername
+    scope
+    expiresAt
+  }
+}
+```
+
+---
+
+## 19) Start Strava OAuth + connect callback
+
+```graphql
+mutation StartStravaAuth {
+  startStravaAuth {
+    ok
+    authUrl
+    message
+  }
+}
+```
+
+Open `authUrl` in the browser. After Strava redirects back to your app (with `code` + `state` query params), exchange via:
+
+```graphql
+mutation ConnectStrava($code: String!, $state: String!) {
+  connectStrava(code: $code, state: $state) {
+    ok
+    message
+  }
+}
+```
+
+---
+
+## 20) Send completed workout to Strava
+
+```graphql
+mutation SendWorkoutToStrava($sessionId: Int!) {
+  sendWorkoutToStrava(sessionId: $sessionId) {
+    ok
+    message
+    activityId
+    activityUrl
+  }
+}
+```
+
+---
+
+## 21) Disconnect Strava
+
+```graphql
+mutation DisconnectStrava {
+  disconnectStrava {
+    ok
+    message
+  }
+}
+```

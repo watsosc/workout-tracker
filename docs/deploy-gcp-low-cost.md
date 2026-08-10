@@ -48,6 +48,19 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now workout-api
 ```
 
+Optional Strava integration env (kept off-repo):
+
+```bash
+sudo tee /etc/workout-api.env >/dev/null <<'EOF'
+STRAVA_CLIENT_ID=your_client_id
+STRAVA_CLIENT_SECRET=your_client_secret
+STRAVA_REDIRECT_URI=https://your-domain/settings
+STRAVA_SCOPES=activity:write,read
+EOF
+sudo chmod 600 /etc/workout-api.env
+sudo systemctl restart workout-api
+```
+
 ## 5) Deploy frontend (static)
 
 Build locally and copy `web/build/` to the VM (or build on VM):

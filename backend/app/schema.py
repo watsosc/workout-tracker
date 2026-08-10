@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import enum
 import re
+import secrets
 
 import strawberry
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -19,6 +20,9 @@ from .models import (
     ExerciseCatalogSource,
     ExerciseTier,
     EquipmentType,
+    OAuthConnection,
+    OAuthProvider,
+    OAuthState,
     Plan,
     PlanRun,
     PlanRunBaseline,
@@ -32,6 +36,8 @@ from .models import (
     SessionExerciseEntry,
     SessionSet,
     User,
+    WorkoutExport,
+    WorkoutExportStatus,
     WorkoutSession,
     WorkoutSessionStatus,
 )
@@ -40,6 +46,15 @@ from .progression import (
     evaluate_progression,
     exercise_prescription,
     initial_weight_for_template,
+)
+from .strava import (
+    StravaError,
+    build_authorize_url,
+    create_activity,
+    deauthorize,
+    exchange_code_for_token,
+    is_strava_configured,
+    refresh_access_token,
 )
 
 DEFAULT_USER_ID = 1
@@ -90,6 +105,13 @@ class GQLEquipmentType(enum.Enum):
     KETTLEBELL = "KETTLEBELL"
     BAND = "BAND"
     OTHER = "OTHER"
+
+
+@strawberry.enum
+class GQLWorkoutExportStatus(enum.Enum):
+    PENDING = "PENDING"
+    SENT = "SENT"
+    FAILED = "FAILED"
 
 
 @strawberry.type
@@ -151,6 +173,7 @@ class SessionSetType:
     is_amrap: bool
     reps_completed: int | None
     weight_kg: float | None
+    duration_seconds: int | None
     completed: bool
     completed_at: datetime | None
 
@@ -163,6 +186,9 @@ class SessionExerciseEntryType:
     planned_sets: int
     planned_reps: int
     planned_weight_kg: float
+    progression_protocol: GQLProgressionProtocol
+    tier: GQLExerciseTier | None
+    expected_rest_seconds: int
     sets: list[SessionSetType]
 
 
@@ -194,6 +220,11 @@ class WorkoutHistoryItemType:
     total_sets: int
     completed_sets: int
     total_volume_kg: float
+    total_duration_seconds: int | None
+    total_set_duration_seconds: int
+    strava_export_status: GQLWorkoutExportStatus | None
+    strava_activity_id: str | None
+    strava_activity_url: str | None
     exercises: list[WorkoutHistoryExerciseType]
 
 
@@ -310,6 +341,31 @@ class ResetResult:
     updated_exercise_count: int
 
 
+@strawberry.type
+class StravaConnectionType:
+    configured: bool
+    connected: bool
+    athlete_id: str | None
+    athlete_username: str | None
+    scope: str | None
+    expires_at: datetime | None
+
+
+@strawberry.type
+class StravaAuthStartType:
+    ok: bool
+    auth_url: str
+    message: str
+
+
+@strawberry.type
+class StravaSendResult:
+    ok: bool
+    message: str
+    activity_id: str | None
+    activity_url: str | None
+
+
 @dataclass
 class ActivePlanContext:
     plan: Plan
@@ -344,6 +400,199 @@ def _protocol_default_tier(protocol: ProgressionProtocol) -> ExerciseTier | None
     if protocol == ProgressionProtocol.GZCLP_T3:
         return ExerciseTier.T3
     return None
+
+
+def _expected_rest_seconds(tier: ExerciseTier | None) -> int:
+    return 180 if tier == ExerciseTier.T1 else 90
+
+
+def _map_export_status(status: WorkoutExportStatus) -> GQLWorkoutExportStatus:
+    return GQLWorkoutExportStatus(status.value)
+
+
+def _format_elapsed(seconds: int) -> str:
+    mins = max(0, seconds) // 60
+    secs = max(0, seconds) % 60
+    return f"{mins}:{secs:02d}"
+
+
+def _ensure_utc(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _strava_activity_url(activity_id: str) -> str:
+    return f"https://www.strava.com/activities/{activity_id}"
+
+
+def _get_oauth_connection(
+    session,
+    user_id: int,
+    provider: OAuthProvider = OAuthProvider.STRAVA,
+) -> OAuthConnection | None:
+    return session.scalar(
+        select(OAuthConnection).where(
+            and_(
+                OAuthConnection.user_id == user_id,
+                OAuthConnection.provider == provider,
+            )
+        )
+    )
+
+
+def _upsert_oauth_connection_from_token_payload(
+    session,
+    user_id: int,
+    provider: OAuthProvider,
+    payload: dict,
+) -> OAuthConnection:
+    access_token = str(payload.get("access_token") or "").strip()
+    refresh_token_value = str(payload.get("refresh_token") or "").strip()
+    if not access_token or not refresh_token_value:
+        raise ValueError("Strava token response missing access_token or refresh_token")
+
+    athlete = payload.get("athlete") or {}
+    athlete_id = athlete.get("id")
+    athlete_username = athlete.get("username")
+    expires_at_raw = payload.get("expires_at")
+    expires_at: datetime | None = None
+    if expires_at_raw is not None:
+        try:
+            expires_at = datetime.utcfromtimestamp(int(expires_at_raw))
+        except Exception:
+            expires_at = None
+
+    connection = _get_oauth_connection(session, user_id, provider)
+    if not connection:
+        connection = OAuthConnection(
+            user_id=user_id,
+            provider=provider,
+            access_token=access_token,
+            refresh_token=refresh_token_value,
+        )
+        session.add(connection)
+
+    connection.access_token = access_token
+    connection.refresh_token = refresh_token_value
+    connection.provider_user_id = str(athlete_id) if athlete_id is not None else connection.provider_user_id
+    connection.provider_username = str(athlete_username) if athlete_username else connection.provider_username
+    connection.token_type = str(payload.get("token_type") or "") or None
+    connection.scope = str(payload.get("scope") or "") or connection.scope
+    connection.expires_at = expires_at
+    return connection
+
+
+def _create_oauth_state(session, user_id: int, provider: OAuthProvider) -> str:
+    now = _now_utc()
+    session.execute(
+        delete(OAuthState).where(
+            and_(
+                OAuthState.user_id == user_id,
+                OAuthState.provider == provider,
+                or_(OAuthState.expires_at < now, OAuthState.consumed_at.is_not(None)),
+            )
+        )
+    )
+
+    state = secrets.token_urlsafe(32)
+    session.add(
+        OAuthState(
+            user_id=user_id,
+            provider=provider,
+            state=state,
+            expires_at=now + timedelta(minutes=15),
+        )
+    )
+    return state
+
+
+def _ensure_strava_access_token(session, user_id: int, connection: OAuthConnection) -> str:
+    if connection.expires_at is None:
+        return connection.access_token
+
+    refresh_at = connection.expires_at - timedelta(seconds=90)
+    if _now_utc() < refresh_at:
+        return connection.access_token
+
+    payload = refresh_access_token(connection.refresh_token)
+    updated = _upsert_oauth_connection_from_token_payload(
+        session,
+        user_id=user_id,
+        provider=OAuthProvider.STRAVA,
+        payload=payload,
+    )
+    session.flush()
+    return updated.access_token
+
+
+def _build_strava_activity_payload(session, workout_session: WorkoutSession) -> dict[str, object]:
+    workout = session.get(PlanWorkout, workout_session.plan_workout_id)
+    run = session.get(PlanRun, workout_session.plan_run_id)
+    plan = session.get(Plan, run.plan_id) if run else None
+
+    entry_rows = session.scalars(
+        select(SessionExerciseEntry).where(SessionExerciseEntry.session_id == workout_session.id)
+    ).all()
+    set_rows = session.scalars(
+        select(SessionSet)
+        .join(SessionExerciseEntry, SessionExerciseEntry.id == SessionSet.entry_id)
+        .where(SessionExerciseEntry.session_id == workout_session.id)
+    ).all()
+
+    completed_rows = [x for x in set_rows if x.completed]
+    total_volume_kg = sum((x.weight_kg or 0.0) * float(x.reps_completed or 0) for x in completed_rows)
+    total_set_duration_seconds = sum(int(x.duration_seconds or 0) for x in completed_rows)
+
+    elapsed_seconds = 0
+    if workout_session.finished_at is not None and workout_session.started_at is not None:
+        elapsed_seconds = max(0, int((workout_session.finished_at - workout_session.started_at).total_seconds()))
+    if elapsed_seconds <= 0:
+        elapsed_seconds = max(1, total_set_duration_seconds)
+
+    start_local = _ensure_utc(workout_session.started_at).isoformat(timespec="seconds")
+
+    base_name = workout.name if workout else "Strength Workout"
+    if plan and plan.name.strip():
+        name = f"{plan.name} · {base_name}"
+    else:
+        name = base_name
+    name = name[:140]
+
+    summary_bits = [
+        f"{len(completed_rows)}/{len(set_rows)} sets",
+        f"{round(total_volume_kg, 1)} kg volume",
+        f"{_format_elapsed(elapsed_seconds)} total",
+    ]
+    if total_set_duration_seconds > 0:
+        summary_bits.append(f"{_format_elapsed(total_set_duration_seconds)} lifting")
+
+    exercise_lines: list[str] = []
+    for entry in entry_rows:
+        exercise = session.get(Exercise, entry.exercise_id)
+        exercise_name = exercise.name if exercise else f"Exercise {entry.exercise_id}"
+        completed_for_entry = [x for x in completed_rows if x.entry_id == entry.id]
+        if not completed_for_entry:
+            continue
+        exercise_lines.append(
+            f"- {exercise_name}: {len(completed_for_entry)} sets, {sum(int(x.reps_completed or 0) for x in completed_for_entry)} reps"
+        )
+
+    description_parts = ["Logged with Workout App", " · ".join(summary_bits)]
+    if exercise_lines:
+        description_parts.append("\n".join(exercise_lines[:8]))
+
+    description = "\n".join(description_parts)[:1800]
+
+    return {
+        "name": name,
+        "sport_type": "WeightTraining",
+        "start_date_local": start_local,
+        "elapsed_time": elapsed_seconds,
+        "description": description,
+        "trainer": 1,
+        "commute": 0,
+    }
 
 
 def _get_default_user(session) -> User:
@@ -460,6 +709,15 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
             .order_by(SessionSet.set_index.asc())
         ).all()
         exercise = session.get(Exercise, entry.exercise_id)
+        template = session.get(PlanWorkoutExercise, entry.plan_workout_exercise_id)
+        protocol = (
+            GQLProgressionProtocol(template.progression_protocol.value)
+            if template
+            else GQLProgressionProtocol.BASIC
+        )
+        tier = GQLExerciseTier(template.tier.value) if template and template.tier else None
+        expected_rest = _expected_rest_seconds(template.tier if template else None)
+
         out_entries.append(
             SessionExerciseEntryType(
                 id=entry.id,
@@ -468,6 +726,9 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
                 planned_sets=entry.planned_sets,
                 planned_reps=entry.planned_reps,
                 planned_weight_kg=entry.planned_weight_kg,
+                progression_protocol=protocol,
+                tier=tier,
+                expected_rest_seconds=expected_rest,
                 sets=[
                     SessionSetType(
                         id=s.id,
@@ -476,6 +737,7 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
                         is_amrap=s.is_amrap,
                         reps_completed=s.reps_completed,
                         weight_kg=s.weight_kg,
+                        duration_seconds=s.duration_seconds,
                         completed=s.completed,
                         completed_at=s.completed_at,
                     )
@@ -786,6 +1048,20 @@ class Query:
             return _active_plan_type(session, user.id)
 
     @strawberry.field
+    def strava_connection(self) -> StravaConnectionType:
+        with db_session() as session:
+            user = _get_default_user(session)
+            row = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
+            return StravaConnectionType(
+                configured=is_strava_configured(),
+                connected=row is not None,
+                athlete_id=row.provider_user_id if row else None,
+                athlete_username=row.provider_username if row else None,
+                scope=row.scope if row else None,
+                expires_at=row.expires_at if row else None,
+            )
+
+    @strawberry.field
     def dashboard(self) -> DashboardType:
         with db_session() as session:
             user = _get_default_user(session)
@@ -922,6 +1198,10 @@ class Query:
                 ).all()
                 completed_rows = [x for x in set_rows if x.completed]
                 total_volume_kg = sum((x.weight_kg or 0.0) * float(x.reps_completed or 0) for x in completed_rows)
+                total_set_duration_seconds = sum(int(x.duration_seconds or 0) for x in completed_rows)
+                total_duration_seconds = None
+                if s.finished_at is not None and s.started_at is not None:
+                    total_duration_seconds = max(0, int((s.finished_at - s.started_at).total_seconds()))
 
                 exercise_items: list[WorkoutHistoryExerciseType] = []
                 for entry in entry_rows:
@@ -941,6 +1221,17 @@ class Query:
                         )
                     )
 
+                export_row = session.scalar(
+                    select(WorkoutExport)
+                    .where(
+                        and_(
+                            WorkoutExport.session_id == s.id,
+                            WorkoutExport.provider == OAuthProvider.STRAVA,
+                        )
+                    )
+                    .order_by(WorkoutExport.id.desc())
+                )
+
                 out.append(
                     WorkoutHistoryItemType(
                         session_id=s.id,
@@ -951,6 +1242,13 @@ class Query:
                         total_sets=len(set_rows),
                         completed_sets=len(completed_rows),
                         total_volume_kg=round(total_volume_kg, 2),
+                        total_duration_seconds=total_duration_seconds,
+                        total_set_duration_seconds=total_set_duration_seconds,
+                        strava_export_status=(
+                            _map_export_status(export_row.status) if export_row else None
+                        ),
+                        strava_activity_id=export_row.remote_activity_id if export_row else None,
+                        strava_activity_url=export_row.remote_activity_url if export_row else None,
                         exercises=exercise_items,
                     )
                 )
@@ -1000,6 +1298,173 @@ class Query:
 
 @strawberry.type
 class Mutation:
+    @strawberry.mutation
+    def start_strava_auth(self) -> StravaAuthStartType:
+        if not is_strava_configured():
+            return StravaAuthStartType(
+                ok=False,
+                auth_url="",
+                message="Strava is not configured on the server",
+            )
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            state = _create_oauth_state(session, user.id, OAuthProvider.STRAVA)
+            try:
+                auth_url = build_authorize_url(state)
+            except StravaError as exc:
+                return StravaAuthStartType(ok=False, auth_url="", message=str(exc))
+
+            session.commit()
+            return StravaAuthStartType(ok=True, auth_url=auth_url, message="Open URL to connect Strava")
+
+    @strawberry.mutation
+    def connect_strava(self, code: str, state: str) -> MutationResult:
+        if not is_strava_configured():
+            return MutationResult(ok=False, message="Strava is not configured on the server")
+
+        clean_code = code.strip()
+        clean_state = state.strip()
+        if not clean_code or not clean_state:
+            return MutationResult(ok=False, message="Missing OAuth code/state")
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            valid_state = session.scalar(
+                select(OAuthState).where(
+                    and_(
+                        OAuthState.user_id == user.id,
+                        OAuthState.provider == OAuthProvider.STRAVA,
+                        OAuthState.state == clean_state,
+                        OAuthState.consumed_at.is_(None),
+                        OAuthState.expires_at >= _now_utc(),
+                    )
+                )
+            )
+            if not valid_state:
+                return MutationResult(ok=False, message="Invalid or expired Strava OAuth state")
+
+            try:
+                payload = exchange_code_for_token(clean_code)
+                _upsert_oauth_connection_from_token_payload(
+                    session,
+                    user_id=user.id,
+                    provider=OAuthProvider.STRAVA,
+                    payload=payload,
+                )
+            except (StravaError, ValueError) as exc:
+                return MutationResult(ok=False, message=f"Strava connect failed: {exc}")
+
+            valid_state.consumed_at = _now_utc()
+            session.commit()
+            return MutationResult(ok=True, message="Connected Strava")
+
+    @strawberry.mutation
+    def disconnect_strava(self) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            connection = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
+            if not connection:
+                return MutationResult(ok=True, message="Strava already disconnected")
+
+            try:
+                deauthorize(connection.access_token)
+            except StravaError:
+                pass
+
+            session.execute(delete(OAuthConnection).where(OAuthConnection.id == connection.id))
+            session.commit()
+            return MutationResult(ok=True, message="Disconnected Strava")
+
+    @strawberry.mutation
+    def send_workout_to_strava(self, session_id: int) -> StravaSendResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            workout_session = session.get(WorkoutSession, session_id)
+            if not workout_session or workout_session.user_id != user.id:
+                return StravaSendResult(
+                    ok=False,
+                    message="Workout session not found",
+                    activity_id=None,
+                    activity_url=None,
+                )
+            if workout_session.status != WorkoutSessionStatus.COMPLETED:
+                return StravaSendResult(
+                    ok=False,
+                    message="Workout session must be completed before export",
+                    activity_id=None,
+                    activity_url=None,
+                )
+
+            connection = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
+            if not connection:
+                return StravaSendResult(
+                    ok=False,
+                    message="Strava is not connected",
+                    activity_id=None,
+                    activity_url=None,
+                )
+
+            export_row = session.scalar(
+                select(WorkoutExport).where(
+                    and_(
+                        WorkoutExport.provider == OAuthProvider.STRAVA,
+                        WorkoutExport.session_id == workout_session.id,
+                    )
+                )
+            )
+            if export_row and export_row.status == WorkoutExportStatus.SENT and export_row.remote_activity_id:
+                return StravaSendResult(
+                    ok=True,
+                    message="Workout already sent to Strava",
+                    activity_id=export_row.remote_activity_id,
+                    activity_url=export_row.remote_activity_url,
+                )
+
+            if not export_row:
+                export_row = WorkoutExport(
+                    user_id=user.id,
+                    session_id=workout_session.id,
+                    provider=OAuthProvider.STRAVA,
+                    status=WorkoutExportStatus.PENDING,
+                )
+                session.add(export_row)
+
+            payload = _build_strava_activity_payload(session, workout_session)
+
+            try:
+                access_token = _ensure_strava_access_token(session, user.id, connection)
+                response = create_activity(access_token, payload)
+                activity_id_raw = response.get("id")
+                if activity_id_raw is None:
+                    raise StravaError("Strava response missing activity id")
+                activity_id = str(activity_id_raw)
+            except StravaError as exc:
+                export_row.status = WorkoutExportStatus.FAILED
+                export_row.last_error = str(exc)[:780]
+                export_row.payload_json = payload
+                session.commit()
+                return StravaSendResult(
+                    ok=False,
+                    message=f"Failed to send workout: {exc}",
+                    activity_id=None,
+                    activity_url=None,
+                )
+
+            export_row.status = WorkoutExportStatus.SENT
+            export_row.remote_activity_id = activity_id
+            export_row.remote_activity_url = _strava_activity_url(activity_id)
+            export_row.payload_json = payload
+            export_row.last_error = None
+            session.commit()
+
+            return StravaSendResult(
+                ok=True,
+                message="Workout sent to Strava",
+                activity_id=activity_id,
+                activity_url=export_row.remote_activity_url,
+            )
+
     @strawberry.mutation
     def link_exercise_to_catalog(
         self,
@@ -1528,6 +1993,7 @@ class Mutation:
                 session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
 
             if session_ids:
+                session.execute(delete(WorkoutExport).where(WorkoutExport.session_id.in_(session_ids)))
                 session.execute(delete(WorkoutSession).where(WorkoutSession.id.in_(session_ids)))
 
             if run_ids:
@@ -1678,9 +2144,12 @@ class Mutation:
         session_set_id: int,
         reps_completed: int,
         weight_kg: float | None = None,
+        duration_seconds: int | None = None,
     ) -> SessionSetType:
         if reps_completed < 0:
             raise ValueError("reps_completed must be >= 0")
+        if duration_seconds is not None and duration_seconds < 0:
+            raise ValueError("duration_seconds must be >= 0")
 
         with db_session() as session:
             sset = session.get(SessionSet, session_set_id)
@@ -1689,6 +2158,7 @@ class Mutation:
 
             sset.reps_completed = reps_completed
             sset.weight_kg = weight_kg if weight_kg is not None else sset.weight_kg
+            sset.duration_seconds = duration_seconds
             sset.completed = True
             sset.completed_at = _now_utc()
             session.commit()
@@ -1700,6 +2170,7 @@ class Mutation:
                 is_amrap=sset.is_amrap,
                 reps_completed=sset.reps_completed,
                 weight_kg=sset.weight_kg,
+                duration_seconds=sset.duration_seconds,
                 completed=sset.completed,
                 completed_at=sset.completed_at,
             )
