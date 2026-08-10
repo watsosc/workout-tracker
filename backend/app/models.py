@@ -331,6 +331,17 @@ class SessionSet(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
+class HeartRateSample(Base):
+    __tablename__ = "heart_rate_samples"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("workout_sessions.id"), index=True)
+    recorded_at: Mapped[datetime] = mapped_column(DateTime, index=True)
+    bpm: Mapped[int] = mapped_column(Integer)
+    source: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class WorkoutExport(Base):
     __tablename__ = "workout_exports"
     __table_args__ = (UniqueConstraint("provider", "session_id", name="uq_workout_export_provider_session"),)

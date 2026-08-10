@@ -19,6 +19,7 @@ from .models import (
     ExerciseCatalogItem,
     ExerciseCatalogSource,
     ExerciseTier,
+    HeartRateSample,
     EquipmentType,
     OAuthConnection,
     OAuthProvider,
@@ -199,7 +200,19 @@ class WorkoutSessionType:
     status: GQLWorkoutSessionStatus
     started_at: datetime
     finished_at: datetime | None
+    heart_rate_sample_count: int
+    avg_heart_rate_bpm: int | None
+    max_heart_rate_bpm: int | None
     entries: list[SessionExerciseEntryType]
+
+
+@strawberry.type
+class HeartRateSampleType:
+    id: int
+    session_id: int
+    recorded_at: datetime
+    bpm: int
+    source: str | None
 
 
 @strawberry.type
@@ -223,6 +236,9 @@ class WorkoutHistoryItemType:
     total_volume_kg: float
     total_duration_seconds: int | None
     total_set_duration_seconds: int
+    heart_rate_sample_count: int
+    avg_heart_rate_bpm: int | None
+    max_heart_rate_bpm: int | None
     strava_export_status: GQLWorkoutExportStatus | None
     strava_activity_id: str | None
     strava_activity_url: str | None
@@ -306,6 +322,13 @@ class BaselineInput:
 
 
 @strawberry.input
+class HeartRateSampleInput:
+    recorded_at: datetime
+    bpm: int
+    source: str | None = None
+
+
+@strawberry.input
 class AddExerciseToActivePlanInput:
     workout_sequence_index: int
     exercise_name: str
@@ -326,6 +349,13 @@ class AddExerciseToActivePlanInput:
 class MutationResult:
     ok: bool
     message: str
+
+
+@strawberry.type
+class HeartRateIngestResult:
+    ok: bool
+    message: str
+    inserted_count: int
 
 
 @strawberry.type
@@ -422,6 +452,34 @@ def _ensure_utc(dt: datetime) -> datetime:
     if dt.tzinfo is None:
         return dt.replace(tzinfo=timezone.utc)
     return dt.astimezone(timezone.utc)
+
+
+def _to_utc_naive(dt: datetime) -> datetime:
+    if dt.tzinfo is None:
+        return dt
+    return dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+def _session_heart_rate_stats(session, workout_session_id: int) -> tuple[int, int | None, int | None]:
+    sample_count = int(
+        session.scalar(
+            select(func.count(HeartRateSample.id)).where(HeartRateSample.session_id == workout_session_id)
+        )
+        or 0
+    )
+    if sample_count == 0:
+        return 0, None, None
+
+    avg_bpm, max_bpm = session.execute(
+        select(
+            func.avg(HeartRateSample.bpm),
+            func.max(HeartRateSample.bpm),
+        ).where(HeartRateSample.session_id == workout_session_id)
+    ).one()
+
+    avg_value = int(round(float(avg_bpm))) if avg_bpm is not None else None
+    max_value = int(max_bpm) if max_bpm is not None else None
+    return sample_count, avg_value, max_value
 
 
 def _strava_activity_url(activity_id: str) -> str:
@@ -850,11 +908,16 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
             )
         )
 
+    hr_count, hr_avg, hr_max = _session_heart_rate_stats(session, workout_session.id)
+
     return WorkoutSessionType(
         id=workout_session.id,
         status=_map_status(workout_session.status),
         started_at=workout_session.started_at,
         finished_at=workout_session.finished_at,
+        heart_rate_sample_count=hr_count,
+        avg_heart_rate_bpm=hr_avg,
+        max_heart_rate_bpm=hr_max,
         entries=out_entries,
     )
 
@@ -1276,6 +1339,37 @@ class Query:
             return _build_session_type(session, ws)
 
     @strawberry.field
+    def session_heart_rate_samples(
+        self,
+        session_id: int,
+        limit: int = 1200,
+    ) -> list[HeartRateSampleType]:
+        with db_session() as session:
+            user = _get_default_user(session)
+            workout_session = session.get(WorkoutSession, session_id)
+            if not workout_session or workout_session.user_id != user.id:
+                return []
+
+            safe_limit = max(1, min(limit, 5000))
+            rows = session.scalars(
+                select(HeartRateSample)
+                .where(HeartRateSample.session_id == session_id)
+                .order_by(HeartRateSample.recorded_at.asc(), HeartRateSample.id.asc())
+                .limit(safe_limit)
+            ).all()
+
+            return [
+                HeartRateSampleType(
+                    id=row.id,
+                    session_id=row.session_id,
+                    recorded_at=row.recorded_at,
+                    bpm=row.bpm,
+                    source=row.source,
+                )
+                for row in rows
+            ]
+
+    @strawberry.field
     def workout_history(self, limit: int = 20) -> list[WorkoutHistoryItemType]:
         with db_session() as session:
             user = _get_default_user(session)
@@ -1327,6 +1421,8 @@ class Query:
                         )
                     )
 
+                hr_count, hr_avg, hr_max = _session_heart_rate_stats(session, s.id)
+
                 export_row = session.scalar(
                     select(WorkoutExport)
                     .where(
@@ -1350,6 +1446,9 @@ class Query:
                         total_volume_kg=round(total_volume_kg, 2),
                         total_duration_seconds=total_duration_seconds,
                         total_set_duration_seconds=total_set_duration_seconds,
+                        heart_rate_sample_count=hr_count,
+                        avg_heart_rate_bpm=hr_avg,
+                        max_heart_rate_bpm=hr_max,
                         strava_export_status=(
                             _map_export_status(export_row.status) if export_row else None
                         ),
@@ -1404,6 +1503,64 @@ class Query:
 
 @strawberry.type
 class Mutation:
+    @strawberry.mutation
+    def append_heart_rate_samples(
+        self,
+        session_id: int,
+        samples: list[HeartRateSampleInput],
+    ) -> HeartRateIngestResult:
+        if not samples:
+            return HeartRateIngestResult(ok=True, message="No samples provided", inserted_count=0)
+        if len(samples) > 5000:
+            return HeartRateIngestResult(
+                ok=False,
+                message="Too many samples in one request (max 5000)",
+                inserted_count=0,
+            )
+
+        with db_session() as session:
+            user = _get_default_user(session)
+            workout_session = session.get(WorkoutSession, session_id)
+            if not workout_session or workout_session.user_id != user.id:
+                return HeartRateIngestResult(
+                    ok=False,
+                    message="Workout session not found",
+                    inserted_count=0,
+                )
+            if workout_session.status == WorkoutSessionStatus.CANCELLED:
+                return HeartRateIngestResult(
+                    ok=False,
+                    message="Cannot attach heart-rate samples to cancelled workout",
+                    inserted_count=0,
+                )
+
+            inserted_count = 0
+            for item in samples:
+                bpm = int(item.bpm)
+                if bpm < 20 or bpm > 255:
+                    return HeartRateIngestResult(
+                        ok=False,
+                        message=f"Invalid bpm value {bpm}. Expected range: 20-255",
+                        inserted_count=0,
+                    )
+
+                session.add(
+                    HeartRateSample(
+                        session_id=workout_session.id,
+                        recorded_at=_to_utc_naive(item.recorded_at),
+                        bpm=bpm,
+                        source=(item.source or "BLE")[:40],
+                    )
+                )
+                inserted_count += 1
+
+            session.commit()
+            return HeartRateIngestResult(
+                ok=True,
+                message="Heart-rate samples saved",
+                inserted_count=inserted_count,
+            )
+
     @strawberry.mutation
     def start_strava_auth(self) -> StravaAuthStartType:
         if not is_strava_configured():
@@ -2045,6 +2202,7 @@ class Mutation:
                 session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
 
             if session_ids:
+                session.execute(delete(HeartRateSample).where(HeartRateSample.session_id.in_(session_ids)))
                 session.execute(delete(WorkoutExport).where(WorkoutExport.session_id.in_(session_ids)))
                 session.execute(delete(WorkoutSession).where(WorkoutSession.id.in_(session_ids)))
 

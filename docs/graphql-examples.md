@@ -615,3 +615,45 @@ mutation DisconnectStrava {
   }
 }
 ```
+
+---
+
+## 23) Append heart-rate samples to a workout session
+
+```graphql
+mutation AppendHeartRateSamples($sessionId: Int!, $samples: [HeartRateSampleInput!]!) {
+  appendHeartRateSamples(sessionId: $sessionId, samples: $samples) {
+    ok
+    message
+    insertedCount
+  }
+}
+```
+
+Variables example:
+
+```json
+{
+  "sessionId": 123,
+  "samples": [
+    { "recordedAt": "2026-08-05T18:22:01Z", "bpm": 112, "source": "GARMIN_BLE" },
+    { "recordedAt": "2026-08-05T18:22:02Z", "bpm": 114, "source": "GARMIN_BLE" }
+  ]
+}
+```
+
+---
+
+## 24) Read heart-rate samples for a workout session
+
+```graphql
+query SessionHeartRateSamples($sessionId: Int!, $limit: Int!) {
+  sessionHeartRateSamples(sessionId: $sessionId, limit: $limit) {
+    id
+    sessionId
+    recordedAt
+    bpm
+    source
+  }
+}
+```
