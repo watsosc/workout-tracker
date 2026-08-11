@@ -603,6 +603,10 @@ mutation SendWorkoutToStrava($sessionId: Int!) {
 }
 ```
 
+Behavior:
+- If heart-rate samples are present for the session, backend uses Strava **TCX upload** flow.
+- If no heart-rate samples are present, backend falls back to Strava **create activity** flow.
+
 ---
 
 ## 22) Disconnect Strava

@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 import enum
 import re
 import secrets
+import time
+import xml.etree.ElementTree as ET
 
 import strawberry
 from sqlalchemy import and_, delete, func, or_, select, update
@@ -55,8 +57,10 @@ from .strava import (
     create_activity,
     deauthorize,
     exchange_code_for_token,
+    get_upload,
     is_strava_configured,
     refresh_access_token,
+    upload_activity_tcx,
 )
 
 DEFAULT_USER_ID = 1
@@ -666,6 +670,105 @@ def _build_strava_activity_payload(session, workout_session: WorkoutSession) -> 
     }
 
 
+def _tcx_time(dt: datetime) -> str:
+    dt_utc = _ensure_utc(dt)
+    return dt_utc.isoformat(timespec="seconds").replace("+00:00", "Z")
+
+
+def _build_strava_tcx_bytes(session, workout_session: WorkoutSession) -> bytes:
+    hr_rows = session.scalars(
+        select(HeartRateSample)
+        .where(HeartRateSample.session_id == workout_session.id)
+        .order_by(HeartRateSample.recorded_at.asc(), HeartRateSample.id.asc())
+    ).all()
+
+    start_dt = _to_utc_naive(workout_session.started_at)
+    end_dt = _to_utc_naive(workout_session.finished_at) if workout_session.finished_at else start_dt
+    elapsed_seconds = max(1, int((end_dt - start_dt).total_seconds()))
+
+    tcx_ns = "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2"
+    xsi_ns = "http://www.w3.org/2001/XMLSchema-instance"
+    schema_loc = (
+        "http://www.garmin.com/xmlschemas/TrainingCenterDatabase/v2 "
+        "http://www.garmin.com/xmlschemas/TrainingCenterDatabasev2.xsd"
+    )
+
+    ET.register_namespace("", tcx_ns)
+    ET.register_namespace("xsi", xsi_ns)
+
+    root = ET.Element(
+        f"{{{tcx_ns}}}TrainingCenterDatabase",
+        {f"{{{xsi_ns}}}schemaLocation": schema_loc},
+    )
+    activities = ET.SubElement(root, f"{{{tcx_ns}}}Activities")
+    activity = ET.SubElement(activities, f"{{{tcx_ns}}}Activity", {"Sport": "Other"})
+    ET.SubElement(activity, f"{{{tcx_ns}}}Id").text = _tcx_time(start_dt)
+
+    lap = ET.SubElement(activity, f"{{{tcx_ns}}}Lap", {"StartTime": _tcx_time(start_dt)})
+    ET.SubElement(lap, f"{{{tcx_ns}}}TotalTimeSeconds").text = str(elapsed_seconds)
+    ET.SubElement(lap, f"{{{tcx_ns}}}DistanceMeters").text = "0.0"
+    ET.SubElement(lap, f"{{{tcx_ns}}}Intensity").text = "Active"
+    ET.SubElement(lap, f"{{{tcx_ns}}}TriggerMethod").text = "Manual"
+
+    track = ET.SubElement(lap, f"{{{tcx_ns}}}Track")
+
+    def add_trackpoint(when: datetime, bpm: int | None = None) -> None:
+        point_time = _to_utc_naive(when)
+        tp = ET.SubElement(track, f"{{{tcx_ns}}}Trackpoint")
+        ET.SubElement(tp, f"{{{tcx_ns}}}Time").text = _tcx_time(point_time)
+        if bpm is not None:
+            hr = ET.SubElement(
+                tp,
+                f"{{{tcx_ns}}}HeartRateBpm",
+                {f"{{{xsi_ns}}}type": "HeartRateInBeatsPerMinute_t"},
+            )
+            ET.SubElement(hr, f"{{{tcx_ns}}}Value").text = str(int(bpm))
+
+    if hr_rows:
+        first_sample_time = _to_utc_naive(hr_rows[0].recorded_at)
+        if first_sample_time > start_dt:
+            add_trackpoint(start_dt)
+
+        for row in hr_rows:
+            add_trackpoint(_to_utc_naive(row.recorded_at), row.bpm)
+
+        last_sample_time = _to_utc_naive(hr_rows[-1].recorded_at)
+        if last_sample_time < end_dt:
+            add_trackpoint(end_dt)
+    else:
+        add_trackpoint(start_dt)
+        if end_dt > start_dt:
+            add_trackpoint(end_dt)
+
+    return ET.tostring(root, encoding="utf-8", xml_declaration=True)
+
+
+def _wait_for_strava_upload_activity_id(
+    access_token: str,
+    upload_id: int,
+    timeout_seconds: int = 90,
+) -> tuple[str, dict]:
+    started = time.monotonic()
+    last: dict = {}
+
+    while True:
+        status = get_upload(access_token, upload_id)
+        last = status
+
+        error = status.get("error")
+        if error:
+            raise StravaError(f"Strava upload failed: {error}")
+
+        activity_id_raw = status.get("activity_id")
+        if activity_id_raw is not None:
+            return str(activity_id_raw), status
+
+        if time.monotonic() - started >= timeout_seconds:
+            raise StravaError("Timed out waiting for Strava upload to finish processing")
+
+        time.sleep(2)
+
+
 def _send_workout_to_strava_with_session(
     session,
     user_id: int,
@@ -722,18 +825,56 @@ def _send_workout_to_strava_with_session(
         session.add(export_row)
 
     payload = _build_strava_activity_payload(session, workout_session)
+    hr_count, _, _ = _session_heart_rate_stats(session, workout_session.id)
+    upload_payload: dict | None = None
 
     try:
         access_token = _ensure_strava_access_token(session, user_id, connection)
-        response = create_activity(access_token, payload)
-        activity_id_raw = response.get("id")
-        if activity_id_raw is None:
-            raise StravaError("Strava response missing activity id")
-        activity_id = str(activity_id_raw)
-    except StravaError as exc:
+
+        if hr_count > 0:
+            tcx_bytes = _build_strava_tcx_bytes(session, workout_session)
+            filename = f"workout-session-{workout_session.id}.tcx"
+            upload_response = upload_activity_tcx(
+                access_token,
+                tcx_bytes,
+                filename=filename,
+                name=str(payload.get("name") or "Strength Workout"),
+                description=str(payload.get("description") or ""),
+                trainer=int(payload.get("trainer") or 1),
+                commute=int(payload.get("commute") or 0),
+                external_id=filename,
+            )
+            upload_id_raw = upload_response.get("id")
+            if upload_id_raw is None:
+                error = upload_response.get("error") or "missing upload id"
+                raise StravaError(f"Strava upload init failed: {error}")
+
+            upload_id = int(upload_id_raw)
+            activity_id, upload_status = _wait_for_strava_upload_activity_id(access_token, upload_id)
+            upload_payload = {
+                "mode": "tcx_upload",
+                "upload_init": upload_response,
+                "upload_final": upload_status,
+                "hr_sample_count": hr_count,
+            }
+        else:
+            response = create_activity(access_token, payload)
+            activity_id_raw = response.get("id")
+            if activity_id_raw is None:
+                raise StravaError("Strava response missing activity id")
+            activity_id = str(activity_id_raw)
+            upload_payload = {
+                "mode": "create_activity",
+                "create_response": response,
+                "hr_sample_count": hr_count,
+            }
+    except (StravaError, ValueError) as exc:
         export_row.status = WorkoutExportStatus.FAILED
         export_row.last_error = str(exc)[:780]
-        export_row.payload_json = payload
+        export_row.payload_json = {
+            "activity_payload": payload,
+            "transport": upload_payload,
+        }
         session.commit()
         return StravaSendResult(
             ok=False,
@@ -745,7 +886,10 @@ def _send_workout_to_strava_with_session(
     export_row.status = WorkoutExportStatus.SENT
     export_row.remote_activity_id = activity_id
     export_row.remote_activity_url = _strava_activity_url(activity_id)
-    export_row.payload_json = payload
+    export_row.payload_json = {
+        "activity_payload": payload,
+        "transport": upload_payload,
+    }
     export_row.last_error = None
     session.commit()
 
