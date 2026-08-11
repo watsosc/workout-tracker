@@ -6,6 +6,7 @@ import type {
 	Dashboard,
 	ExerciseCatalogMatch,
 	ExerciseProgressPoint,
+	HeartRateSample,
 	SeedExerciseInput,
 	SeedWorkoutInput,
 	StravaAuthStart,
@@ -145,6 +146,9 @@ const historyQuery = `
 			totalVolumeKg
 			totalDurationSeconds
 			totalSetDurationSeconds
+			heartRateSampleCount
+			avgHeartRateBpm
+			maxHeartRateBpm
 			stravaExportStatus
 			stravaActivityId
 			stravaActivityUrl
@@ -165,6 +169,18 @@ const progressQuery = `
 			date
 			topWeightKg
 			estimated1rmKg
+		}
+	}
+`;
+
+const sessionHeartRateSamplesQuery = `
+	query SessionHeartRateSamples($sessionId: Int!, $limit: Int!) {
+		sessionHeartRateSamples(sessionId: $sessionId, limit: $limit) {
+			id
+			sessionId
+			recordedAt
+			bpm
+			source
 		}
 	}
 `;
@@ -407,6 +423,17 @@ export async function fetchExerciseProgress(
 		limit
 	});
 	return data.exerciseProgress;
+}
+
+export async function fetchSessionHeartRateSamples(
+	sessionId: number,
+	limit = 360
+): Promise<HeartRateSample[]> {
+	const data = await gql<{ sessionHeartRateSamples: HeartRateSample[] }>(
+		sessionHeartRateSamplesQuery,
+		{ sessionId, limit }
+	);
+	return data.sessionHeartRateSamples;
 }
 
 export async function searchExerciseCatalog(

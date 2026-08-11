@@ -273,10 +273,25 @@
 			STRAVA_REDIRECT_URI to the API service environment.
 		</p>
 	{:else if stravaConnection.connected}
-		<p class="subtle">
-			Connected{stravaConnection.athleteId ? ` (athlete ${stravaConnection.athleteId})` : ''} · token
-			expires: {formatDate(stravaConnection.expiresAt)}
-		</p>
+		<div class="strava-status-row">
+			<p class="subtle">
+				Connected{stravaConnection.athleteId ? ` (athlete ${stravaConnection.athleteId})` : ''} · token
+				expires: {formatDate(stravaConnection.expiresAt)}
+			</p>
+			<div class="strava-auto-send">
+				<button
+					type="button"
+					class="strava-toggle"
+					class:on={stravaConnection.autoSendOnFinish}
+					onclick={onToggleStravaAutoSend}
+					disabled={loading}
+					aria-label={`Auto-send to Strava ${stravaConnection.autoSendOnFinish ? 'on' : 'off'}`}
+				>
+					<span class="strava-toggle-knob" class:on={stravaConnection.autoSendOnFinish}></span>
+				</button>
+				<span class="subtle strava-auto-send-label">auto-send to Strava</span>
+			</div>
+		</div>
 		<div class="actions">
 			<button type="button" onclick={onDisconnectStrava} disabled={loading}>Disconnect Strava</button>
 		</div>
@@ -285,21 +300,6 @@
 		<div class="actions">
 			<button type="button" onclick={onConnectStrava} disabled={loading}>Connect Strava</button>
 		</div>
-	{/if}
-
-	{#if stravaConnection}
-		<label class="toggle-row">
-			<input
-				type="checkbox"
-				checked={stravaConnection.autoSendOnFinish}
-				onchange={onToggleStravaAutoSend}
-				disabled={loading || !stravaConnection.configured}
-			/>
-			<span>Auto-send completed workouts to Strava</span>
-		</label>
-		<p class="subtle">
-			Default: off. When enabled, each workout attempts a Strava export right after finish.
-		</p>
 	{/if}
 </section>
 
@@ -417,11 +417,64 @@
 		flex-wrap: wrap;
 	}
 
-	.toggle-row {
-		display: inline-flex;
+	.strava-status-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 0.9rem;
+		flex-wrap: wrap;
+	}
+
+	.strava-status-row p {
+		margin: 0;
+	}
+
+	.strava-auto-send {
+		display: flex;
+		flex-direction: column;
 		align-items: center;
-		gap: 0.5rem;
-		margin-top: 0.8rem;
+		justify-content: center;
+		gap: 0.28rem;
+		margin-left: auto;
+		min-width: max-content;
+	}
+
+	.strava-auto-send-label {
+		font-size: 0.78rem;
+		line-height: 1.2;
+		text-align: center;
+	}
+
+	.strava-toggle {
+		position: relative;
+		width: 3.35rem;
+		height: 1.9rem;
+		padding: 0;
+		border-radius: 999px;
+		background: #334155;
+		border: 1px solid #475569;
+	}
+
+	.strava-toggle.on {
+		border-color: #1d4ed8;
+	}
+
+	.strava-toggle-knob {
+		position: absolute;
+		top: 0.22rem;
+		left: 0.22rem;
+		width: 1.35rem;
+		height: 1.35rem;
+		border-radius: 999px;
+		background: #94a3b8;
+		transition:
+			transform 140ms ease,
+			background-color 140ms ease;
+	}
+
+	.strava-toggle-knob.on {
+		transform: translateX(1.45rem);
+		background: #2563eb;
 	}
 
 	.baseline-grid {

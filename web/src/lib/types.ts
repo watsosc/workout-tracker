@@ -115,6 +115,9 @@ export type WorkoutHistoryItem = {
 	totalVolumeKg: number;
 	totalDurationSeconds: number | null;
 	totalSetDurationSeconds: number;
+	heartRateSampleCount: number;
+	avgHeartRateBpm: number | null;
+	maxHeartRateBpm: number | null;
 	stravaExportStatus: WorkoutExportStatus | null;
 	stravaActivityId: string | null;
 	stravaActivityUrl: string | null;
@@ -196,6 +199,14 @@ export type StravaConnection = {
 	scope: string | null;
 	expiresAt: string | null;
 	autoSendOnFinish: boolean;
+};
+
+export type HeartRateSample = {
+	id: number;
+	sessionId: number;
+	recordedAt: string;
+	bpm: number;
+	source: string | null;
 };
 
 export type StravaAuthStart = {

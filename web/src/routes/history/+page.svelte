@@ -1,8 +1,14 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { fetchStravaConnection, fetchWorkoutHistory, sendWorkoutToStrava } from '$lib/workout-api';
+	import {
+		fetchSessionHeartRateSamples,
+		fetchStravaConnection,
+		fetchWorkoutHistory,
+		sendWorkoutToStrava
+	} from '$lib/workout-api';
 	import { pushToast } from '$lib/toast';
-	import type { StravaConnection, WorkoutHistoryItem } from '$lib/types';
+	import HeartRateChart from '$lib/components/heart-rate-chart.svelte';
+	import type { HeartRateSample, StravaConnection, WorkoutHistoryItem } from '$lib/types';
 	import {
 		displayWeightFromKg,
 		formatDate,
@@ -18,6 +24,8 @@
 	let history = $state<WorkoutHistoryItem[]>([]);
 	let weightUnit = $state<WeightUnit>('lb');
 	let stravaConnection = $state<StravaConnection | null>(null);
+	let heartRateBySession = $state<Record<number, HeartRateSample[]>>({});
+	let heartRateLoadingBySession = $state<Record<number, boolean>>({});
 
 	function volumeLabel(valueKg: number): string {
 		return `${displayWeightFromKg(valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
@@ -34,10 +42,35 @@
 		return `${mins}:${String(secs).padStart(2, '0')}`;
 	}
 
+	function setHeartRateLoading(sessionId: number, isLoading: boolean) {
+		const next = { ...heartRateLoadingBySession };
+		if (isLoading) next[sessionId] = true;
+		else delete next[sessionId];
+		heartRateLoadingBySession = next;
+	}
+
+
 	async function loadHistory() {
 		const [items, strava] = await Promise.all([fetchWorkoutHistory(120), fetchStravaConnection()]);
 		history = items;
 		stravaConnection = strava;
+		heartRateBySession = {};
+		heartRateLoadingBySession = {};
+
+		const sessionsWithHr = items.filter((item) => item.heartRateSampleCount > 0).map((item) => item.sessionId);
+		await Promise.all(
+			sessionsWithHr.map(async (sessionId) => {
+				setHeartRateLoading(sessionId, true);
+				try {
+					const samples = await fetchSessionHeartRateSamples(sessionId, 360);
+					heartRateBySession = { ...heartRateBySession, [sessionId]: samples };
+				} catch {
+					heartRateBySession = { ...heartRateBySession, [sessionId]: [] };
+				} finally {
+					setHeartRateLoading(sessionId, false);
+				}
+			})
+		);
 	}
 
 	async function onSendToStrava(item: WorkoutHistoryItem) {
@@ -118,6 +151,12 @@
 								<span class="subtle">Workout time</span>
 								<strong>{formatDuration(item.totalDurationSeconds)}</strong>
 							</div>
+							{#if item.heartRateSampleCount > 0}
+								<div>
+									<span class="subtle">Heart rate</span>
+									<strong>{item.avgHeartRateBpm ?? '—'} avg · {item.maxHeartRateBpm ?? '—'} max</strong>
+								</div>
+							{/if}
 							<div class="strava-row">
 								{#if item.stravaExportStatus === 'SENT' && item.stravaActivityUrl}
 									<a href={item.stravaActivityUrl} target="_blank" rel="noreferrer">View on Strava</a>
@@ -135,6 +174,20 @@
 							</div>
 						</div>
 					</header>
+
+					{#if item.heartRateSampleCount > 0}
+						<section class="hr-section">
+							{#if heartRateLoadingBySession[item.sessionId]}
+								<p class="subtle">Loading heart-rate chart…</p>
+							{:else if (heartRateBySession[item.sessionId] ?? []).length >= 2}
+								<div class="hr-chart-wrap" aria-label="Heart rate chart">
+									<HeartRateChart samples={heartRateBySession[item.sessionId] ?? []} />
+								</div>
+							{:else}
+								<p class="subtle">Heart-rate data captured ({item.heartRateSampleCount} sample(s)).</p>
+							{/if}
+						</section>
+					{/if}
 
 					{#if item.exercises.length === 0}
 						<p class="subtle">No completed exercises recorded.</p>
@@ -222,6 +275,19 @@
 	.strava-row button,
 	.strava-row a {
 		justify-self: end;
+	}
+
+	.hr-section {
+		display: grid;
+		gap: 0.45rem;
+	}
+
+	.hr-chart-wrap {
+		display: grid;
+		padding: 0.4rem;
+		border-radius: 8px;
+		border: 1px solid #1e293b;
+		background: #050b16;
 	}
 
 	table {

@@ -7,12 +7,18 @@ import enum
 import re
 import secrets
 import time
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 import xml.etree.ElementTree as ET
 
 import strawberry
 from sqlalchemy import and_, delete, func, or_, select, update
 
-from .config import DEFAULT_USER_NAME
+from .config import (
+    DEFAULT_USER_NAME,
+    STRAVA_DEV_FAKE_CONNECT,
+    STRAVA_REDIRECT_URI,
+    STRAVA_SCOPES,
+)
 from .db import db_session
 from .models import (
     Exercise,
@@ -492,6 +498,34 @@ def _session_heart_rate_stats(session, workout_session_id: int) -> tuple[int, in
 
 def _strava_activity_url(activity_id: str) -> str:
     return f"https://www.strava.com/activities/{activity_id}"
+
+
+def _is_strava_available() -> bool:
+    return is_strava_configured() or STRAVA_DEV_FAKE_CONNECT
+
+
+def _append_query_params(url: str, params: dict[str, str]) -> str:
+    parts = urlsplit(url)
+    existing = dict(parse_qsl(parts.query, keep_blank_values=True))
+    existing.update(params)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(existing), parts.fragment))
+
+
+def _build_fake_strava_token_payload(code: str) -> dict:
+    now = int(time.time())
+    code_key = code.replace(" ", "-")[:24] or "dev"
+    return {
+        "access_token": f"dev-access-{code_key}",
+        "refresh_token": f"dev-refresh-{code_key}",
+        "token_type": "Bearer",
+        "expires_at": now + 86400,
+        "expires_in": 86400,
+        "scope": STRAVA_SCOPES,
+        "athlete": {
+            "id": 99999999,
+            "username": "dev-athlete",
+        },
+    }
 
 
 def _get_or_create_user_preference(session, user_id: int) -> UserPreference:
@@ -1383,7 +1417,7 @@ class Query:
             row = _get_oauth_connection(session, user.id, OAuthProvider.STRAVA)
             pref = session.scalar(select(UserPreference).where(UserPreference.user_id == user.id))
             return StravaConnectionType(
-                configured=is_strava_configured(),
+                configured=_is_strava_available(),
                 connected=row is not None,
                 athlete_id=row.provider_user_id if row else None,
                 athlete_username=row.provider_username if row else None,
@@ -1725,7 +1759,7 @@ class Mutation:
 
     @strawberry.mutation
     def start_strava_auth(self) -> StravaAuthStartType:
-        if not is_strava_configured():
+        if not _is_strava_available():
             return StravaAuthStartType(
                 ok=False,
                 auth_url="",
@@ -1735,17 +1769,29 @@ class Mutation:
         with db_session() as session:
             user = _get_default_user(session)
             state = _create_oauth_state(session, user.id, OAuthProvider.STRAVA)
-            try:
-                auth_url = build_authorize_url(state)
-            except StravaError as exc:
-                return StravaAuthStartType(ok=False, auth_url="", message=str(exc))
+
+            if STRAVA_DEV_FAKE_CONNECT:
+                redirect_uri = STRAVA_REDIRECT_URI or "http://127.0.0.1:5173/settings"
+                auth_url = _append_query_params(
+                    redirect_uri,
+                    {
+                        "code": "dev-mock-code",
+                        "state": state,
+                        "scope": STRAVA_SCOPES,
+                    },
+                )
+            else:
+                try:
+                    auth_url = build_authorize_url(state)
+                except StravaError as exc:
+                    return StravaAuthStartType(ok=False, auth_url="", message=str(exc))
 
             session.commit()
             return StravaAuthStartType(ok=True, auth_url=auth_url, message="Open URL to connect Strava")
 
     @strawberry.mutation
     def connect_strava(self, code: str, state: str) -> MutationResult:
-        if not is_strava_configured():
+        if not _is_strava_available():
             return MutationResult(ok=False, message="Strava is not configured on the server")
 
         clean_code = code.strip()
@@ -1770,7 +1816,11 @@ class Mutation:
                 return MutationResult(ok=False, message="Invalid or expired Strava OAuth state")
 
             try:
-                payload = exchange_code_for_token(clean_code)
+                if STRAVA_DEV_FAKE_CONNECT and clean_code.startswith("dev-mock"):
+                    payload = _build_fake_strava_token_payload(clean_code)
+                else:
+                    payload = exchange_code_for_token(clean_code)
+
                 _upsert_oauth_connection_from_token_payload(
                     session,
                     user_id=user.id,
