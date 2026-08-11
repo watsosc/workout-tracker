@@ -9,6 +9,7 @@
 		startWorkout
 	} from '$lib/workout-api';
 	import type { ActivePlan, Dashboard, SessionEntry, SessionSet, WorkoutSession } from '$lib/types';
+	import { pushToast } from '$lib/toast';
 	import {
 		displayWeightFromKg,
 		getPreferredWeightUnit,
@@ -155,18 +156,48 @@
 		syncSessionUiState();
 	}
 
-	async function runAction(action: () => Promise<void>, okMessage?: string) {
+	async function runAction<T>(action: () => Promise<T>, okMessage?: string): Promise<T | undefined> {
 		loading = true;
 		errorMessage = '';
 		try {
-			await action();
+			const result = await action();
 			await loadWorkoutPage();
-			if (okMessage) infoMessage = okMessage;
+			if (okMessage) {
+				infoMessage = okMessage;
+				pushToast(okMessage, 'success');
+			}
+			return result;
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
+			return undefined;
 		} finally {
 			loading = false;
 		}
+	}
+
+	function showFinishAndStravaToast(
+		result: WorkoutSession | undefined,
+		baseMessage: string
+	) {
+		if (!result) return;
+		const status = result.stravaExportStatus;
+		if (status === 'SENT') {
+			infoMessage = result.stravaActivityUrl
+				? `${baseMessage} · Strava upload succeeded (${result.stravaActivityUrl})`
+				: `${baseMessage} · Strava upload succeeded`;
+			pushToast(infoMessage, 'success');
+			return;
+		}
+		if (status === 'FAILED') {
+			errorMessage = result.stravaLastError
+				? `${baseMessage} · Strava upload failed: ${result.stravaLastError}`
+				: `${baseMessage} · Strava upload failed`;
+			pushToast(errorMessage, 'error');
+			return;
+		}
+		infoMessage = baseMessage;
+		pushToast(baseMessage, 'success');
 	}
 
 	function openAmrapPrompt(
@@ -231,7 +262,8 @@
 		const sessionAfter = activeSession;
 		const pendingAfter = currentPendingSet(sessionAfter);
 		if (sessionAfter && !pendingAfter) {
-			await runAction(() => finishWorkout(sessionAfter.id), 'Workout finished');
+			const finishResult = await runAction(() => finishWorkout(sessionAfter.id));
+			showFinishAndStravaToast(finishResult, 'Workout finished');
 			stopSetTimer();
 			return;
 		}
@@ -247,7 +279,8 @@
 	async function onExitWorkoutEarly() {
 		const session = activeSession;
 		if (!session) return;
-		await runAction(() => finishWorkout(session.id), 'Workout ended early');
+		const finishResult = await runAction(() => finishWorkout(session.id));
+		showFinishAndStravaToast(finishResult, 'Workout ended early');
 		stopSetTimer();
 	}
 

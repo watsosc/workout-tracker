@@ -84,6 +84,13 @@ export type WorkoutSession = {
 	status: 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 	startedAt: string;
 	finishedAt: string | null;
+	heartRateSampleCount: number;
+	avgHeartRateBpm: number | null;
+	maxHeartRateBpm: number | null;
+	stravaExportStatus: WorkoutExportStatus | null;
+	stravaActivityId: string | null;
+	stravaActivityUrl: string | null;
+	stravaLastError: string | null;
 	entries: SessionEntry[];
 };
 

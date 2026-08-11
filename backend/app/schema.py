@@ -207,6 +207,10 @@ class WorkoutSessionType:
     heart_rate_sample_count: int
     avg_heart_rate_bpm: int | None
     max_heart_rate_bpm: int | None
+    strava_export_status: GQLWorkoutExportStatus | None
+    strava_activity_id: str | None
+    strava_activity_url: str | None
+    strava_last_error: str | None
     entries: list[SessionExerciseEntryType]
 
 
@@ -1053,6 +1057,16 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
         )
 
     hr_count, hr_avg, hr_max = _session_heart_rate_stats(session, workout_session.id)
+    export_row = session.scalar(
+        select(WorkoutExport)
+        .where(
+            and_(
+                WorkoutExport.session_id == workout_session.id,
+                WorkoutExport.provider == OAuthProvider.STRAVA,
+            )
+        )
+        .order_by(WorkoutExport.id.desc())
+    )
 
     return WorkoutSessionType(
         id=workout_session.id,
@@ -1062,6 +1076,10 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
         heart_rate_sample_count=hr_count,
         avg_heart_rate_bpm=hr_avg,
         max_heart_rate_bpm=hr_max,
+        strava_export_status=_map_export_status(export_row.status) if export_row else None,
+        strava_activity_id=export_row.remote_activity_id if export_row else None,
+        strava_activity_url=export_row.remote_activity_url if export_row else None,
+        strava_last_error=export_row.last_error if export_row else None,
         entries=out_entries,
     )
 

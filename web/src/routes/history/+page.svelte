@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { fetchStravaConnection, fetchWorkoutHistory, sendWorkoutToStrava } from '$lib/workout-api';
+	import { pushToast } from '$lib/toast';
 	import type { StravaConnection, WorkoutHistoryItem } from '$lib/types';
 	import {
 		displayWeightFromKg,
@@ -49,9 +50,11 @@
 			infoMessage = result.activityUrl
 				? `Sent to Strava: ${result.activityUrl}`
 				: result.message;
+			pushToast(infoMessage, 'success');
 			await loadHistory();
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
 		} finally {
 			loading = false;
 		}
@@ -69,6 +72,7 @@
 				await loadHistory();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
+				pushToast(errorMessage, 'error');
 			} finally {
 				loading = false;
 			}

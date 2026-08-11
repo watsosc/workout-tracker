@@ -19,6 +19,7 @@
 		DashboardStatus,
 		StravaConnection
 	} from '$lib/types';
+	import { pushToast } from '$lib/toast';
 	import {
 		convertKgToUnit,
 		convertUnitToKg,
@@ -88,9 +89,13 @@
 		try {
 			await action();
 			await loadSettings();
-			if (msg) infoMessage = msg;
+			if (msg) {
+				infoMessage = msg;
+				pushToast(msg, 'success');
+			}
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
 		} finally {
 			loading = false;
 		}
@@ -151,12 +156,14 @@
 
 		if (oauthError) {
 			errorMessage = `Strava OAuth error: ${oauthError}`;
+			pushToast(errorMessage, 'error');
 			clearOAuthQueryParams();
 			return true;
 		}
 
 		if (!code || !state) {
 			errorMessage = 'Strava OAuth callback is missing code/state';
+			pushToast(errorMessage, 'error');
 			clearOAuthQueryParams();
 			return true;
 		}
@@ -176,6 +183,7 @@
 			window.location.assign(init.authUrl);
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
 		} finally {
 			loading = false;
 		}
@@ -209,6 +217,7 @@
 				if (!handledCallback) await loadSettings();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
+				pushToast(errorMessage, 'error');
 			} finally {
 				loading = false;
 			}

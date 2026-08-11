@@ -17,6 +17,7 @@
 		SeedWorkoutExerciseInput,
 		SeedWorkoutInput
 	} from '$lib/types';
+	import { pushToast } from '$lib/toast';
 	import {
 		convertKgToUnit,
 		convertUnitToKg,
@@ -864,9 +865,13 @@
 		try {
 			await action();
 			await loadPlanPage();
-			if (message) infoMessage = message;
+			if (message) {
+				infoMessage = message;
+				pushToast(message, 'success');
+			}
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
 		} finally {
 			loading = false;
 		}

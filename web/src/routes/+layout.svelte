@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import favicon from '$lib/assets/favicon.svg';
+	import { removeToast, toasts } from '$lib/toast';
 
 	let { children } = $props();
 
@@ -42,6 +43,17 @@
 	<main class="content">
 		{@render children()}
 	</main>
+
+	<div class="toast-stack" aria-live="polite" aria-atomic="true">
+		{#each $toasts as toast (toast.id)}
+			<div class={`toast ${toast.kind}`} role="status">
+				<span>{toast.message}</span>
+				<button type="button" class="toast-close" aria-label="Dismiss" onclick={() => removeToast(toast.id)}>
+					×
+				</button>
+			</div>
+		{/each}
+	</div>
 </div>
 
 <style>
@@ -115,6 +127,53 @@
 		padding: 1rem;
 		display: grid;
 		gap: 1rem;
+	}
+
+	.toast-stack {
+		position: fixed;
+		right: 1rem;
+		bottom: 1rem;
+		display: grid;
+		gap: 0.55rem;
+		z-index: 120;
+		max-width: min(92vw, 420px);
+	}
+
+	.toast {
+		display: flex;
+		justify-content: space-between;
+		align-items: flex-start;
+		gap: 0.6rem;
+		padding: 0.68rem 0.78rem;
+		border-radius: 10px;
+		border: 1px solid #334155;
+		background: #0b1220;
+		box-shadow: 0 8px 20px rgba(2, 6, 23, 0.45);
+		font-size: 0.9rem;
+	}
+
+	.toast.success {
+		border-color: #166534;
+		background: #052e16;
+	}
+
+	.toast.error {
+		border-color: #991b1b;
+		background: #450a0a;
+	}
+
+	.toast.info {
+		border-color: #1d4ed8;
+		background: #0b1f47;
+	}
+
+	.toast-close {
+		padding: 0.1rem 0.35rem;
+		line-height: 1;
+		font-size: 1rem;
+		background: transparent;
+		border: 0;
+		color: #cbd5e1;
 	}
 
 	:global(.card) {

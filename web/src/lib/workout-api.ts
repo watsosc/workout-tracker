@@ -99,6 +99,13 @@ const activeSessionQuery = `
 			status
 			startedAt
 			finishedAt
+			heartRateSampleCount
+			avgHeartRateBpm
+			maxHeartRateBpm
+			stravaExportStatus
+			stravaActivityId
+			stravaActivityUrl
+			stravaLastError
 			entries {
 				id
 				exerciseId
@@ -224,6 +231,11 @@ const finishWorkoutMutation = `
 		finishWorkout(sessionId: $sessionId) {
 			id
 			status
+			finishedAt
+			stravaExportStatus
+			stravaActivityId
+			stravaActivityUrl
+			stravaLastError
 		}
 	}
 `;
@@ -462,8 +474,9 @@ export async function completeSet(input: {
 	await gql(completeSetMutation, input);
 }
 
-export async function finishWorkout(sessionId: number): Promise<void> {
-	await gql(finishWorkoutMutation, { sessionId });
+export async function finishWorkout(sessionId: number): Promise<WorkoutSession> {
+	const data = await gql<{ finishWorkout: WorkoutSession }>(finishWorkoutMutation, { sessionId });
+	return data.finishWorkout;
 }
 
 export async function setExerciseOneRepMax(exerciseId: number, oneRepMaxKg: number): Promise<void> {
