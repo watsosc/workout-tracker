@@ -329,6 +329,7 @@
 				if (activeSession) restartSetTimer();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
+				pushToast(errorMessage, 'error');
 			} finally {
 				loading = false;
 			}
@@ -495,13 +496,6 @@
 			<a class="link-btn" href="/plan">Create Plan</a>
 		{/if}
 	</section>
-
-	{#if infoMessage}
-		<p class="banner success">{infoMessage}</p>
-	{/if}
-	{#if errorMessage}
-		<p class="banner error">{errorMessage}</p>
-	{/if}
 
 	{#if dashboard?.status && dashboard.status.needsNew1rmExercises.length > 0}
 		<section class="card">

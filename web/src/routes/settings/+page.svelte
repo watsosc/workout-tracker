@@ -238,12 +238,6 @@
 	{/if}
 </section>
 
-{#if infoMessage}
-	<p class="banner success">{infoMessage}</p>
-{/if}
-{#if errorMessage}
-	<p class="banner error">{errorMessage}</p>
-{/if}
 
 <section class="card">
 	<h2>Units</h2>

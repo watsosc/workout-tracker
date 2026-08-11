@@ -120,12 +120,6 @@
 	{#if loading}
 		<p class="subtle">Loading…</p>
 	{/if}
-	{#if errorMessage}
-		<p class="banner error">{errorMessage}</p>
-	{/if}
-	{#if infoMessage}
-		<p class="banner success">{infoMessage}</p>
-	{/if}
 
 	{#if !loading && history.length === 0}
 		<p class="subtle">No completed workouts yet.</p>

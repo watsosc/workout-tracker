@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { pushToast } from '$lib/toast';
 	import {
 		fetchActivePlan,
 		fetchDashboard,
@@ -278,6 +279,7 @@
 				await loadProgress();
 			} catch (error) {
 				errorMessage = error instanceof Error ? error.message : String(error);
+				pushToast(errorMessage, 'error');
 			} finally {
 				loading = false;
 			}
@@ -291,9 +293,6 @@
 	<h1>Analytics</h1>
 	{#if loading}
 		<p class="subtle">Loading…</p>
-	{/if}
-	{#if errorMessage}
-		<p class="banner error">{errorMessage}</p>
 	{/if}
 
 	<section class="panel">

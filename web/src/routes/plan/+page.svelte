@@ -380,6 +380,7 @@
 		const day = next.find((d) => d.id === dayId);
 		if (day && !isNonDecreasing(day.exercises.map((row) => tierRankFromProtocol(row.protocol)))) {
 			errorMessage = 'Tier order must be T1 before T2 before T3';
+			pushToast(errorMessage, 'error');
 			return;
 		}
 
@@ -661,6 +662,7 @@
 		const day = next.find((d) => d.id === dayId);
 		if (day && !isNonDecreasing(day.exercises.map((exercise) => tierRankFromTier(exercise.tier)))) {
 			errorMessage = 'Tier order must be T1 before T2 before T3';
+			pushToast(errorMessage, 'error');
 			return;
 		}
 
@@ -1206,6 +1208,7 @@
 			await loadPlanPage();
 		} catch (error) {
 			errorMessage = error instanceof Error ? error.message : String(error);
+			pushToast(errorMessage, 'error');
 		} finally {
 			loading = false;
 		}
@@ -1224,12 +1227,6 @@
 	{/if}
 </section>
 
-{#if infoMessage}
-	<p class="banner success">{infoMessage}</p>
-{/if}
-{#if errorMessage}
-	<p class="banner error">{errorMessage}</p>
-{/if}
 
 {#if !activePlan}
 	<section class="card">
