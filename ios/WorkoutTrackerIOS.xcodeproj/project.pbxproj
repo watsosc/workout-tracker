@@ -1,0 +1,363 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00100010001000100010001 /* WorkoutTrackerIOSApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010001 /* WorkoutTrackerIOSApp.swift */; };
+		A00100010001000100010002 /* AppSettings.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010002 /* AppSettings.swift */; };
+		A00100010001000100010003 /* GraphQLClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010003 /* GraphQLClient.swift */; };
+		A00100010001000100010004 /* WorkoutAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010004 /* WorkoutAPI.swift */; };
+		A00100010001000100010005 /* WeightUnit.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010005 /* WeightUnit.swift */; };
+		A00100010001000100010006 /* WorkoutModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010006 /* WorkoutModels.swift */; };
+		A00100010001000100010007 /* Formatters.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010007 /* Formatters.swift */; };
+		A00100010001000100010008 /* WorkoutView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010008 /* WorkoutView.swift */; };
+		A00100010001000100010009 /* AnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010009 /* AnalyticsView.swift */; };
+		A0010001000100010001000A /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000A /* HistoryView.swift */; };
+		A0010001000100010001000B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000B /* SettingsView.swift */; };
+		A0010001000100010001000C /* HeartRateBluetoothManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000E /* HeartRateBluetoothManager.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A00200010001000100010001 /* WorkoutTrackerIOSApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutTrackerIOSApp.swift; sourceTree = "<group>"; };
+		A00200010001000100010002 /* AppSettings.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppSettings.swift; sourceTree = "<group>"; };
+		A00200010001000100010003 /* GraphQLClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GraphQLClient.swift; sourceTree = "<group>"; };
+		A00200010001000100010004 /* WorkoutAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutAPI.swift; sourceTree = "<group>"; };
+		A00200010001000100010005 /* WeightUnit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WeightUnit.swift; sourceTree = "<group>"; };
+		A00200010001000100010006 /* WorkoutModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutModels.swift; sourceTree = "<group>"; };
+		A00200010001000100010007 /* Formatters.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Formatters.swift; sourceTree = "<group>"; };
+		A00200010001000100010008 /* WorkoutView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutView.swift; sourceTree = "<group>"; };
+		A00200010001000100010009 /* AnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsView.swift; sourceTree = "<group>"; };
+		A0020001000100010001000A /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
+		A0020001000100010001000B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A0020001000100010001000C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
+		A0020001000100010001000D /* WorkoutTrackerIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorkoutTrackerIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A0020001000100010001000E /* HeartRateBluetoothManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateBluetoothManager.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00300010001000100010001 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00400010001000100010001 = {
+			isa = PBXGroup;
+			children = (
+				A00400010001000100010002 /* WorkoutTrackerIOS */,
+				A00400010001000100010003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00400010001000100010002 /* WorkoutTrackerIOS */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010001 /* WorkoutTrackerIOSApp.swift */,
+				A00400010001000100010004 /* Core */,
+				A00400010001000100010005 /* Models */,
+				A00400010001000100010006 /* Features */,
+				A00400010001000100010007 /* Shared */,
+				A0020001000100010001000C /* Info.plist */,
+			);
+			path = WorkoutTrackerIOS;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A0020001000100010001000D /* WorkoutTrackerIOS.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010004 /* Core */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010002 /* AppSettings.swift */,
+				A00200010001000100010003 /* GraphQLClient.swift */,
+				A00200010001000100010004 /* WorkoutAPI.swift */,
+				A00200010001000100010005 /* WeightUnit.swift */,
+				A0020001000100010001000E /* HeartRateBluetoothManager.swift */,
+			);
+			path = Core;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010005 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010006 /* WorkoutModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010006 /* Features */ = {
+			isa = PBXGroup;
+			children = (
+				A00400010001000100010008 /* Workout */,
+				A00400010001000100010009 /* Analytics */,
+				A0040001000100010001000A /* History */,
+				A0040001000100010001000B /* Settings */,
+			);
+			path = Features;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010007 /* Shared */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010007 /* Formatters.swift */,
+			);
+			path = Shared;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010008 /* Workout */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010008 /* WorkoutView.swift */,
+			);
+			path = Workout;
+			sourceTree = "<group>";
+		};
+		A00400010001000100010009 /* Analytics */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010009 /* AnalyticsView.swift */,
+			);
+			path = Analytics;
+			sourceTree = "<group>";
+		};
+		A0040001000100010001000A /* History */ = {
+			isa = PBXGroup;
+			children = (
+				A0020001000100010001000A /* HistoryView.swift */,
+			);
+			path = History;
+			sourceTree = "<group>";
+		};
+		A0040001000100010001000B /* Settings */ = {
+			isa = PBXGroup;
+			children = (
+				A0020001000100010001000B /* SettingsView.swift */,
+			);
+			path = Settings;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00500010001000100010001 /* WorkoutTrackerIOS */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00800010001000100010001 /* Build configuration list for PBXNativeTarget "WorkoutTrackerIOS" */;
+			buildPhases = (
+				A00600010001000100010001 /* Sources */,
+				A00300010001000100010001 /* Frameworks */,
+				A00600010001000100010002 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WorkoutTrackerIOS;
+			productName = WorkoutTrackerIOS;
+			productReference = A0020001000100010001000D /* WorkoutTrackerIOS.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00700010001000100010001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1610;
+				LastUpgradeCheck = 1610;
+				TargetAttributes = {
+					A00500010001000100010001 = {
+						CreatedOnToolsVersion = 16.1;
+					};
+				};
+			};
+			buildConfigurationList = A00800010001000100010002 /* Build configuration list for PBXProject "WorkoutTrackerIOS" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00400010001000100010001;
+			productRefGroup = A00400010001000100010003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00500010001000100010001 /* WorkoutTrackerIOS */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		A00600010001000100010002 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00600010001000100010001 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00100010001000100010001 /* WorkoutTrackerIOSApp.swift in Sources */,
+				A00100010001000100010002 /* AppSettings.swift in Sources */,
+				A00100010001000100010003 /* GraphQLClient.swift in Sources */,
+				A00100010001000100010004 /* WorkoutAPI.swift in Sources */,
+				A00100010001000100010005 /* WeightUnit.swift in Sources */,
+				A00100010001000100010006 /* WorkoutModels.swift in Sources */,
+				A00100010001000100010007 /* Formatters.swift in Sources */,
+				A00100010001000100010008 /* WorkoutView.swift in Sources */,
+				A00100010001000100010009 /* AnalyticsView.swift in Sources */,
+				A0010001000100010001000A /* HistoryView.swift in Sources */,
+				A0010001000100010001000B /* SettingsView.swift in Sources */,
+				A0010001000100010001000C /* HeartRateBluetoothManager.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A00900010001000100010001 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		A00900010001000100010002 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+			};
+			name = Release;
+		};
+		A00900010001000100010003 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WorkoutTrackerIOS/Info.plist;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seanwatson.WorkoutTrackerIOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A00900010001000100010004 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = "";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = "";
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = WorkoutTrackerIOS/Info.plist;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.seanwatson.WorkoutTrackerIOS;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphonesimulator iphoneos";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00800010001000100010001 /* Build configuration list for PBXNativeTarget "WorkoutTrackerIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00900010001000100010003 /* Debug */,
+				A00900010001000100010004 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00800010001000100010002 /* Build configuration list for PBXProject "WorkoutTrackerIOS" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00900010001000100010001 /* Debug */,
+				A00900010001000100010002 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = A00700010001000100010001 /* Project object */;
+}
