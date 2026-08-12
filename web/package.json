@@ -5,7 +5,10 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite dev --host 127.0.0.1",
-		"dev:all": "fish ../scripts/dev-all.fish",
+		"dev:all": "bash ../scripts/dev-all.sh --web",
+		"dev:all:web": "bash ../scripts/dev-all.sh --web",
+		"dev:all:ios": "bash ../scripts/dev-all.sh --ios",
+		"dev:all:ios:iphone16": "bash ../scripts/dev-all.sh --ios --ios-device \"iPhone 16\"",
 		"build": "vite build",
 		"preview": "vite preview",
 		"prepare": "svelte-kit sync || echo ''",
