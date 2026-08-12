@@ -7,7 +7,8 @@ Python GraphQL API for workout tracking.
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install --upgrade pip
+pip install .
 uvicorn app.main:app --reload
 ```
 

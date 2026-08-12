@@ -71,6 +71,8 @@ workout-app/
 │       ├── analytics/
 │       ├── history/
 │       └── settings/
+├── ios/                      # SwiftUI iOS frontend (no plan tab)
+│   └── WorkoutTrackerIOS/
 ├── docs/
 │   ├── architecture.md
 │   ├── deploy-gcp-low-cost.md
@@ -89,7 +91,8 @@ workout-app/
 cd backend
 python -m venv .venv
 source .venv/bin/activate
-pip install -e .
+python -m pip install --upgrade pip
+pip install .
 uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
 ```
 
@@ -110,20 +113,40 @@ Frontend URL:
 
 Vite proxies `/graphql` and `/health` to backend in dev.
 
-### 3) One-command dev (fish)
+### 3) One-command dev (shell)
 
 From repo root:
 
-```fish
-./scripts/dev-all.fish
+```bash
+./scripts/dev-all.sh --web
 ```
 
-> `dev-all.fish` expects backend dependencies to already exist in `backend/.venv`.
+Or to launch the native iOS frontend in a **local iOS Simulator** (not hardware):
 
-Or from `web/`:
+```bash
+./scripts/dev-all.sh --ios
+```
 
-```fish
-npm run dev:all
+You can choose a preferred simulator device (default is `iPhone 16`):
+
+```bash
+./scripts/dev-all.sh --ios --ios-device "iPhone 16"
+```
+
+List simulator options:
+
+```bash
+./scripts/dev-all.sh --ios --ios-list-devices
+```
+
+> `dev-all.sh` expects backend dependencies to already exist in `backend/.venv`.
+
+From repo root (or from `web/`) you can run:
+
+```bash
+npm run dev:all:web
+npm run dev:all:ios
+npm run dev:all:ios:iphone16
 ```
 
 ---
@@ -236,7 +259,7 @@ GraphQL examples live in:
 
 ## Troubleshooting
 
-- **Port already in use (8000/5173):** stop old dev processes before `dev-all.fish`.
+- **Port already in use (8000/5173):** stop old dev processes before `dev-all.sh`.
 - **Frontend can’t reach API:** confirm backend is running and dev proxy target is `127.0.0.1:8000`.
 - **Unexpected SQLite behavior:** verify active DB path (`DATABASE_URL`) and that startup migrations completed.
 - **No analytics points visible:** complete at least one workout set/session for relevant series.
