@@ -23,6 +23,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     private var pendingUpload: [[String: Any]] = []
     private var uploadTask: Task<Void, Never>?
     private var receiveExpiryTask: Task<Void, Never>?
+    private var mockTask: Task<Void, Never>?
 
     private let heartRateServiceUUID = CBUUID(string: "180D")
     private let heartRateMeasurementUUID = CBUUID(string: "2A37")
@@ -37,12 +38,19 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     func start(for sessionId: Int, api: WorkoutAPI) {
         activeSessionId = sessionId
         self.api = api
+        startUploadLoop()
+
+        if shouldUseMockHeartRate {
+            statusText = "Mock heart-rate stream"
+            startMockStream()
+            return
+        }
+
         if central == nil {
             central = CBCentralManager(delegate: self, queue: nil)
         } else {
             startScanningIfReady()
         }
-        startUploadLoop()
     }
 
     func stop() {
@@ -52,6 +60,8 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
         uploadTask = nil
         receiveExpiryTask?.cancel()
         receiveExpiryTask = nil
+        mockTask?.cancel()
+        mockTask = nil
 
         if let peripheral {
             central?.cancelPeripheralConnection(peripheral)
@@ -74,6 +84,34 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
                 await flushPendingUploadIfNeeded()
             }
         }
+    }
+
+    private var shouldUseMockHeartRate: Bool {
+        let env = ProcessInfo.processInfo.environment["WORKOUT_MOCK_HEART_RATE"]
+        if env == "1" || env?.lowercased() == "true" { return true }
+        return UserDefaults.standard.bool(forKey: "workout.ios.mock-heart-rate")
+    }
+
+    private func startMockStream() {
+        mockTask?.cancel()
+        mockTask = Task {
+            var index = 0
+            while !Task.isCancelled {
+                let bpm = mockBpm(index: index)
+                let now = Date()
+                enqueueSample(bpm, at: now)
+                markReceiving()
+                index += 1
+                try? await Task.sleep(for: .seconds(1))
+            }
+        }
+    }
+
+    private func mockBpm(index: Int) -> Int {
+        let baseline = 107.5
+        let amplitude = 27.5
+        let value = baseline + amplitude * sin(Double(index) * 0.33)
+        return max(80, min(135, Int(value.rounded())))
     }
 
     private func markReceiving() {
@@ -256,6 +294,9 @@ extension HeartRateBluetoothManager: CBPeripheralDelegate {
             guard characteristic.uuid == heartRateMeasurementUUID else { return }
             guard let data = characteristic.value else { return }
             guard let bpm = parseHeartRate(from: data), bpm >= 20, bpm <= 255 else { return }
+
+            mockTask?.cancel()
+            mockTask = nil
 
             let now = Date()
             enqueueSample(bpm, at: now)

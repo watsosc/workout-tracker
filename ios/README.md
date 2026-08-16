@@ -41,3 +41,6 @@ You can change it in **Settings → API**.
   - `./scripts/dev-all.sh --ios` (reuses a booted simulator when available, then builds/installs/launches app against local backend)
   - `./scripts/dev-all.sh --ios --ios-device "iPhone 16"` (pick preferred simulator model)
   - `./scripts/dev-all.sh --ios --ios-list-devices` (list booted/available iPhone simulators)
+  - `./scripts/dev-all.sh --ios --ios-mock-heart-rate` (force a looping 80-135 bpm mock stream for in-workout UI testing)
+- Demo data seed command:
+  - `npm run seed:test-data` (creates demo plan + active workout session + completed history + heart-rate samples)

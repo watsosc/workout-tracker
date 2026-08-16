@@ -11,14 +11,16 @@ BACKEND_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
 MODE="web"
 IOS_DEVICE_NAME="iPhone 16"
 IOS_LIST_DEVICES_ONLY="false"
+IOS_MOCK_HEART_RATE="false"
 
 usage() {
   cat <<EOF
-Usage: ./scripts/dev-all.sh [--web|--ios] [--ios-device <name>] [--ios-list-devices]
-  --web                Run backend + Svelte web frontend (default)
-  --ios                Run backend + iOS Simulator app
-  --ios-device <name>  Preferred simulator device name (default: iPhone 16)
-  --ios-list-devices   List booted/available iPhone simulators and exit
+Usage: ./scripts/dev-all.sh [--web|--ios] [--ios-device <name>] [--ios-list-devices] [--ios-mock-heart-rate]
+  --web                 Run backend + Svelte web frontend (default)
+  --ios                 Run backend + iOS Simulator app
+  --ios-device <name>   Preferred simulator device name (default: iPhone 16)
+  --ios-list-devices    List booted/available iPhone simulators and exit
+  --ios-mock-heart-rate Force a looping 80-135 bpm mock stream in the iOS app
 EOF
 }
 
@@ -73,6 +75,9 @@ while [[ $# -gt 0 ]]; do
       ;;
     --ios-list-devices)
       IOS_LIST_DEVICES_ONLY="true"
+      ;;
+    --ios-mock-heart-rate)
+      IOS_MOCK_HEART_RATE="true"
       ;;
     -h|--help)
       usage
@@ -196,6 +201,15 @@ else
     echo "Reusing already booted simulator."
   fi
 
+  # Keep only one booted simulator (the selected target) for predictable launches.
+  BOOTED_UDIDS="$(xcrun simctl list devices | sed -nE 's/.*\(([0-9A-F-]{36})\) \(Booted\).*/\1/p')"
+  while IFS= read -r udid; do
+    if [[ -n "$udid" && "$udid" != "$TARGET_UDID" ]]; then
+      echo "Shutting down extra booted simulator: $udid"
+      xcrun simctl shutdown "$udid" >/dev/null 2>&1 || true
+    fi
+  done <<< "$BOOTED_UDIDS"
+
   xcrun simctl boot "$TARGET_UDID" >/dev/null 2>&1 || true
   xcrun simctl bootstatus "$TARGET_UDID" -b >/dev/null
 
@@ -218,7 +232,21 @@ else
   fi
 
   xcrun simctl install "$TARGET_UDID" "$APP_PATH"
-  LAUNCH_OUTPUT="$(SIMCTL_CHILD_WORKOUT_GRAPHQL_ENDPOINT="http://127.0.0.1:8000/graphql" \
+
+  # Ensure local script-driven runs default to local backend in app settings.
+  LOCAL_GRAPHQL_ENDPOINT="http://127.0.0.1:8000/graphql"
+  if ! xcrun simctl spawn "$TARGET_UDID" defaults write "$APP_BUNDLE_ID" workout.ios.graphql-endpoint "$LOCAL_GRAPHQL_ENDPOINT" >/dev/null 2>&1; then
+    echo "Warning: could not prewrite simulator defaults for $APP_BUNDLE_ID"
+  fi
+
+  if [[ "$IOS_MOCK_HEART_RATE" == "true" ]]; then
+    xcrun simctl spawn "$TARGET_UDID" defaults write "$APP_BUNDLE_ID" workout.ios.mock-heart-rate -bool true >/dev/null 2>&1 || true
+    echo "Enabled mock heart-rate stream (80-135 bpm loop)."
+  else
+    xcrun simctl spawn "$TARGET_UDID" defaults write "$APP_BUNDLE_ID" workout.ios.mock-heart-rate -bool false >/dev/null 2>&1 || true
+  fi
+
+  LAUNCH_OUTPUT="$(SIMCTL_CHILD_WORKOUT_GRAPHQL_ENDPOINT="$LOCAL_GRAPHQL_ENDPOINT" SIMCTL_CHILD_WORKOUT_MOCK_HEART_RATE="$([[ "$IOS_MOCK_HEART_RATE" == "true" ]] && echo 1 || echo 0)" \
     xcrun simctl launch --terminate-running-process "$TARGET_UDID" "$APP_BUNDLE_ID" 2>&1 || true)"
 
   if ! echo "$LAUNCH_OUTPUT" | grep -q "$APP_BUNDLE_ID"; then
@@ -232,7 +260,8 @@ else
   echo "  Simulator device: $TARGET_NAME ($TARGET_UDID)"
   echo "  Bundle id:        $APP_BUNDLE_ID"
   echo "  GraphQL:          http://127.0.0.1:8000/graphql"
-  echo "  App endpoint:     http://127.0.0.1:8000/graphql"
+  echo "  App endpoint:     $LOCAL_GRAPHQL_ENDPOINT"
+  echo "  Mock HR stream:   $IOS_MOCK_HEART_RATE"
   echo ""
   echo "Press Ctrl-C to stop backend."
 

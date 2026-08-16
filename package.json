@@ -5,6 +5,8 @@
   "scripts": {
     "dev:all:web": "bash ./scripts/dev-all.sh --web",
     "dev:all:ios": "bash ./scripts/dev-all.sh --ios",
-    "dev:all:ios:iphone16": "bash ./scripts/dev-all.sh --ios --ios-device \"iPhone 16\""
+    "dev:all:ios:iphone16": "bash ./scripts/dev-all.sh --ios --ios-device \"iPhone 16\"",
+    "dev:all:ios:mockhr": "bash ./scripts/dev-all.sh --ios --ios-mock-heart-rate",
+    "seed:test-data": "python3 ./scripts/seed_test_data.py"
   }
 }

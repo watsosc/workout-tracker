@@ -139,6 +139,12 @@ List simulator options:
 ./scripts/dev-all.sh --ios --ios-list-devices
 ```
 
+Force mock heart-rate stream in the iOS app (80-135 bpm loop):
+
+```bash
+./scripts/dev-all.sh --ios --ios-mock-heart-rate
+```
+
 > `dev-all.sh` expects backend dependencies to already exist in `backend/.venv`.
 
 From repo root (or from `web/`) you can run:
@@ -147,6 +153,14 @@ From repo root (or from `web/`) you can run:
 npm run dev:all:web
 npm run dev:all:ios
 npm run dev:all:ios:iphone16
+npm run dev:all:ios:mockhr
+```
+
+Seed local test data (active + completed sessions and heart-rate samples):
+
+```bash
+# with backend venv active and deps installed
+npm run seed:test-data
 ```
 
 ---
