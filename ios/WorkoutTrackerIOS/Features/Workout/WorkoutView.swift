@@ -175,6 +175,9 @@ struct WorkoutView: View {
     var body: some View {
         NavigationStack {
             ZStack(alignment: .bottomTrailing) {
+                Color(red: 11 / 255, green: 18 / 255, blue: 32 / 255)
+                    .ignoresSafeArea()
+
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) {
                         if model.loading {
@@ -223,14 +226,18 @@ struct WorkoutView: View {
                     value: $amrapValue,
                     mode: amrapMode,
                     target: model.pendingSet()?.targetReps ?? 0,
-                    onCancel: { showingAmrapEntry = false },
+                    onCancel: {
+                        showingAmrapEntry = false
+                    },
                     onSubmit: {
                         guard let reps = Int(amrapValue) else { return }
                         let target = model.pendingSet()?.targetReps ?? 0
                         if amrapMode == .success, reps < target { return }
                         if amrapMode == .failed, reps >= target { return }
                         showingAmrapEntry = false
-                        Task { await model.submitCurrentSet(using: api, mode: amrapMode, amrapReps: reps) }
+                        Task {
+                            await model.submitCurrentSet(using: api, mode: amrapMode, amrapReps: reps)
+                        }
                     }
                 )
             }
@@ -239,59 +246,51 @@ struct WorkoutView: View {
 
     @ViewBuilder
     private func activeSessionPanel(_ session: WorkoutSession) -> some View {
-        heartRatePanel
+        let pending = model.pendingSet()
 
-        if let pending = model.pendingSet() {
-            VStack(alignment: .leading, spacing: 12) {
-                Text(pending.entry.exerciseName).font(.title2).bold()
-                Text("\(pending.targetReps)\(pending.setItem.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(pending.weightKg, unit: settings.weightUnit)) \(settings.weightUnit.label)")
-                    .foregroundStyle(.secondary)
+        if let pending {
+            VStack(alignment: .leading, spacing: 14) {
+                timerPanel(for: pending)
 
-                Text("Rest timer: \(formatTimer(model.timerSeconds))")
-                    .font(.system(.title3, design: .monospaced))
-
-                HStack {
-                    Button("Complete") {
-                        if pending.setItem.isAmrap {
-                            amrapMode = .success
-                            amrapValue = "\(pending.targetReps)"
-                            showingAmrapEntry = true
-                        } else {
-                            Task { await model.submitCurrentSet(using: api, mode: .success, amrapReps: nil) }
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-
-                    Button("Fail") {
-                        if pending.setItem.isAmrap {
-                            amrapMode = .failed
-                            amrapValue = "\(max(0, pending.targetReps - 1))"
-                            showingAmrapEntry = true
-                        } else {
-                            Task { await model.submitCurrentSet(using: api, mode: .failed, amrapReps: nil) }
-                        }
-                    }
-                    .buttonStyle(.bordered)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(pending.entry.exerciseName)
+                        .font(.title2)
+                        .bold()
+                    Text("\(pending.targetReps)\(pending.setItem.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(pending.weightKg, unit: settings.weightUnit)) \(settings.weightUnit.label)")
+                        .foregroundStyle(.secondary)
                 }
 
-                Button("End workout") {
-                    Task { await model.endWorkout(using: api) }
-                }
-                .foregroundStyle(.red)
+                heartRatePanel
+
+                outcomeSelector(for: pending)
             }
+            .padding(12)
+            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 14))
         } else {
             Text("All sets complete. Finishing workout…")
         }
 
         Divider()
         ForEach(session.entries) { entry in
-            VStack(alignment: .leading, spacing: 4) {
-                Text(entry.exerciseName).bold()
+            HStack(alignment: .center, spacing: 10) {
+                Text(entry.exerciseName)
+                    .bold()
+                Spacer()
                 Text("\(entry.plannedSets)x\(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: settings.weightUnit)) \(settings.weightUnit.label)")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 4)
+            .padding(.vertical, 6)
+        }
+
+        if pending != nil {
+            Button("End workout") {
+                Task { await model.endWorkout(using: api) }
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 12)
+            .foregroundStyle(.red)
+            .buttonStyle(.bordered)
         }
     }
 
@@ -327,59 +326,145 @@ struct WorkoutView: View {
     private var heartRatePanel: some View {
         HStack(alignment: .center, spacing: 12) {
             Group {
-                if heartRate.samples.count >= 2 {
-                    Chart(heartRate.samples) { sample in
+                if recentHeartRateSamples.count >= 2 {
+                    Chart(recentHeartRateSamples) { sample in
                         LineMark(
                             x: .value("Time", sample.timestamp),
                             y: .value("BPM", sample.bpm)
                         )
-                        .foregroundStyle(.pink)
+                        .interpolationMethod(.catmullRom)
+                        .foregroundStyle(.green)
+                        .lineStyle(StrokeStyle(lineWidth: 2.5))
                     }
-                    .chartYAxis {
-                        AxisMarks(position: .leading)
-                    }
+                    .chartXAxis(.hidden)
+                    .chartYAxis(.hidden)
+                    .chartYScale(domain: 70...145)
                 } else {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Heart rate")
-                            .font(.headline)
-                        Text("Waiting for heart-rate stream…")
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading)
+                    RoundedRectangle(cornerRadius: 8)
+                        .fill(Color.green.opacity(0.08))
+                        .overlay(
+                            Text("Waiting for heart-rate stream…")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        )
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 120)
+            .frame(height: 110)
 
             VStack(alignment: .trailing, spacing: 4) {
-                Text("Latest")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
                 Text(heartRate.latestBpm.map { "\($0) bpm" } ?? "—")
-                    .font(.title3)
-                    .bold()
-                    .foregroundStyle(heartRate.isReceivingData ? .blue : .secondary)
-                Text(heartRate.statusText)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.trailing)
+                    .font(.system(size: 34, weight: .bold, design: .rounded))
+                    .foregroundStyle(.green)
             }
-            .frame(width: 130, alignment: .trailing)
+            .frame(width: 110, alignment: .trailing)
         }
         .padding(10)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+        .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(Color.green.opacity(0.15), lineWidth: 1)
+        )
+    }
+
+    private var recentHeartRateSamples: [LiveHeartRateSample] {
+        guard let latest = heartRate.samples.last?.timestamp else { return [] }
+        let cutoff = latest.addingTimeInterval(-10)
+        return heartRate.samples.filter { $0.timestamp >= cutoff }
+    }
+
+    private func restTargetSeconds(for pending: WorkoutViewModel.PendingSet) -> Int {
+        let fromProtocol: Int
+        switch pending.entry.progressionProtocol {
+        case .gzclpT1: fromProtocol = 180
+        case .gzclpT2: fromProtocol = 120
+        case .gzclpT3, .basic: fromProtocol = 90
+        }
+        let backendValue = pending.entry.expectedRestSeconds
+        return max(backendValue, fromProtocol)
+    }
+
+    private func restState(for pending: WorkoutViewModel.PendingSet) -> String {
+        let expected = restTargetSeconds(for: pending)
+        if model.timerSeconds > expected { return "over" }
+        if model.timerSeconds >= max(0, expected - 15) { return "warn" }
+        return "ok"
+    }
+
+    private func timerColor(for pending: WorkoutViewModel.PendingSet) -> Color {
+        switch restState(for: pending) {
+        case "over": return .red
+        case "warn": return .orange
+        default: return .green
+        }
+    }
+
+    private func timerPanel(for pending: WorkoutViewModel.PendingSet) -> some View {
+        let expected = restTargetSeconds(for: pending)
+        let mins = expected / 60
+        let secs = expected % 60
+        let target = "\(String(format: "%02d", mins)):\(String(format: "%02d", secs))"
+
+        return VStack(spacing: 6) {
+            SegmentedDigitalClock(text: formatTimer(model.timerSeconds), color: timerColor(for: pending))
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 13)
+                .background(Color.black, in: RoundedRectangle(cornerRadius: 14))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(timerColor(for: pending).opacity(0.55), lineWidth: 2)
+                )
+            Text("Rest target \(target)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func outcomeSelector(for pending: WorkoutViewModel.PendingSet) -> some View {
+        HStack(spacing: 10) {
+            Button("Complete") {
+                if pending.setItem.isAmrap {
+                    amrapMode = .success
+                    amrapValue = "\(pending.targetReps)"
+                    showingAmrapEntry = true
+                } else {
+                    Task {
+                        await model.submitCurrentSet(using: api, mode: .success, amrapReps: nil)
+                    }
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .frame(maxWidth: .infinity)
+
+            Button("Fail") {
+                if pending.setItem.isAmrap {
+                    amrapMode = .failed
+                    amrapValue = "\(max(0, pending.targetReps - 1))"
+                    showingAmrapEntry = true
+                } else {
+                    Task {
+                        await model.submitCurrentSet(using: api, mode: .failed, amrapReps: nil)
+                    }
+                }
+            }
+            .buttonStyle(.bordered)
+            .frame(maxWidth: .infinity)
+        }
+        .controlSize(.large)
     }
 
     private var bluetoothIndicator: some View {
         ZStack {
             Circle()
-                .fill(Color(.systemBackground).opacity(0.85))
-                .frame(width: 42, height: 42)
+                .fill(Color.white.opacity(0.14))
+                .overlay(
+                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                )
+                .frame(width: 44, height: 44)
 
             Image(systemName: "bluetooth")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(heartRate.isReceivingData ? .blue : .gray)
+                .font(.system(size: 19, weight: .bold))
+                .foregroundColor(heartRate.isReceivingData ? .blue : .gray)
 
             if !heartRate.isReceivingData {
                 Rectangle()
@@ -395,6 +480,81 @@ struct WorkoutView: View {
         let mins = value / 60
         let secs = value % 60
         return "\(String(format: "%02d", mins)):\(String(format: "%02d", secs))"
+    }
+}
+
+private struct SegmentedDigitalClock: View {
+    let text: String
+    let color: Color
+
+    var body: some View {
+        let glyphs = Array(text)
+        HStack(spacing: 8) {
+            ForEach(Array(glyphs.enumerated()), id: \.offset) { _, glyph in
+                if glyph == ":" {
+                    VStack(spacing: 12) {
+                        Circle().fill(color).frame(width: 9, height: 9)
+                        Circle().fill(color).frame(width: 9, height: 9)
+                    }
+                    .frame(width: 16)
+                } else {
+                    SegmentedDigit(glyph: glyph, color: color)
+                        .frame(width: 52, height: 96)
+                }
+            }
+        }
+    }
+}
+
+private struct SegmentedDigit: View {
+    let glyph: Character
+    let color: Color
+
+    private var segments: Set<Character> {
+        switch glyph {
+        case "0": return ["a", "b", "c", "d", "e", "f"]
+        case "1": return ["b", "c"]
+        case "2": return ["a", "b", "g", "e", "d"]
+        case "3": return ["a", "b", "c", "d", "g"]
+        case "4": return ["f", "g", "b", "c"]
+        case "5": return ["a", "f", "g", "c", "d"]
+        case "6": return ["a", "f", "e", "d", "c", "g"]
+        case "7": return ["a", "b", "c"]
+        case "8": return ["a", "b", "c", "d", "e", "f", "g"]
+        case "9": return ["a", "b", "c", "d", "f", "g"]
+        default: return []
+        }
+    }
+
+    var body: some View {
+        ZStack {
+            segmentHorizontal(on: segments.contains("a"))
+                .offset(y: -40)
+            segmentHorizontal(on: segments.contains("g"))
+            segmentHorizontal(on: segments.contains("d"))
+                .offset(y: 40)
+
+            segmentVertical(on: segments.contains("f"))
+                .offset(x: -21, y: -20)
+            segmentVertical(on: segments.contains("b"))
+                .offset(x: 21, y: -20)
+            segmentVertical(on: segments.contains("e"))
+                .offset(x: -21, y: 20)
+            segmentVertical(on: segments.contains("c"))
+                .offset(x: 21, y: 20)
+        }
+    }
+
+    private func segmentHorizontal(on: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(on ? color : Color.white.opacity(0.12))
+            .frame(width: 34, height: 8)
+    }
+
+    private func segmentVertical(on: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 3)
+            .fill(on ? color : Color.white.opacity(0.12))
+            .frame(width: 8, height: 28)
     }
 }
 

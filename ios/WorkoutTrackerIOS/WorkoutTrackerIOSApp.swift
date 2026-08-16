@@ -8,6 +8,7 @@ struct WorkoutTrackerIOSApp: App {
         WindowGroup {
             RootTabView()
                 .environmentObject(settings)
+                .preferredColorScheme(.dark)
         }
     }
 }

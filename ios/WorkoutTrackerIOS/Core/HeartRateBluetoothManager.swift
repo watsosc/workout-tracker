@@ -80,7 +80,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
         uploadTask?.cancel()
         uploadTask = Task {
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                try? await Task.sleep(for: .seconds(10))
                 await flushPendingUploadIfNeeded()
             }
         }
@@ -151,7 +151,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
             "source": sourceName
         ])
 
-        if pendingUpload.count >= 12 {
+        if pendingUpload.count >= 24 {
             Task { await flushPendingUploadIfNeeded() }
         }
     }
@@ -178,7 +178,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
 
     private func flushPendingUploadIfNeeded(force: Bool = false) async {
         guard let sessionId = activeSessionId, let api else { return }
-        guard force || pendingUpload.count >= 1 else { return }
+        guard force || pendingUpload.count >= 10 else { return }
 
         let payload = pendingUpload
         pendingUpload = []
