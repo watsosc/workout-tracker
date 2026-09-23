@@ -326,6 +326,7 @@ private extension WorkoutAPI {
         finishWorkout(sessionId: $sessionId) {
             id
             status
+            startedAt
             finishedAt
             heartRateSampleCount
             avgHeartRateBpm

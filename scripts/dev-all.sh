@@ -212,6 +212,8 @@ else
 
   xcrun simctl boot "$TARGET_UDID" >/dev/null 2>&1 || true
   xcrun simctl bootstatus "$TARGET_UDID" -b >/dev/null
+  # Bring the selected simulator device to the foreground.
+  open -a Simulator --args -CurrentDeviceUDID "$TARGET_UDID" >/dev/null 2>&1 || true
 
   DERIVED_DATA="$ROOT_DIR/ios/.derived"
   echo "Building iOS app for simulator $TARGET_NAME ($TARGET_UDID) ..."

@@ -58,13 +58,14 @@ final class WorkoutViewModel: ObservableObject {
         }
     }
 
-    func submitCurrentSet(using api: WorkoutAPI, mode: SetOutcome, amrapReps: Int?) async {
+    func submitCurrentSet(using api: WorkoutAPI, mode: SetOutcome, repsOverride: Int?) async {
         guard let pending = pendingSet() else { return }
         var reps = pending.targetReps
 
-        if pending.setItem.isAmrap {
-            guard let amrapReps else { return }
-            reps = amrapReps
+        if let repsOverride {
+            reps = repsOverride
+        } else if pending.setItem.isAmrap {
+            return
         } else if mode == .failed {
             reps = max(0, pending.targetReps - 1)
         }
@@ -165,9 +166,11 @@ enum SetOutcome {
 struct WorkoutView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var model = WorkoutViewModel()
-    @State private var showingAmrapEntry = false
-    @State private var amrapValue = ""
-    @State private var amrapMode: SetOutcome = .success
+    @State private var showingRepsEntry = false
+    @State private var repsEntryValue = ""
+    @State private var repsEntryMode: SetOutcome = .success
+    @State private var repsEntryTarget = 0
+    @State private var repsEntryIsAmrap = false
     @StateObject private var heartRate = HeartRateBluetoothManager()
 
     private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
@@ -221,25 +224,27 @@ struct WorkoutView: View {
             .onDisappear {
                 heartRate.stop()
             }
-            .sheet(isPresented: $showingAmrapEntry) {
-                AmrapEntrySheet(
-                    value: $amrapValue,
-                    mode: amrapMode,
-                    target: model.pendingSet()?.targetReps ?? 0,
+            .sheet(isPresented: $showingRepsEntry) {
+                RepsEntrySheet(
+                    value: $repsEntryValue,
+                    mode: repsEntryMode,
+                    target: repsEntryTarget,
+                    isAmrap: repsEntryIsAmrap,
                     onCancel: {
-                        showingAmrapEntry = false
+                        showingRepsEntry = false
                     },
                     onSubmit: {
-                        guard let reps = Int(amrapValue) else { return }
-                        let target = model.pendingSet()?.targetReps ?? 0
-                        if amrapMode == .success, reps < target { return }
-                        if amrapMode == .failed, reps >= target { return }
-                        showingAmrapEntry = false
+                        guard let reps = Int(repsEntryValue) else { return }
+                        if reps < 0 { return }
+                        if repsEntryMode == .success && repsEntryIsAmrap && reps < repsEntryTarget { return }
+                        if repsEntryMode == .failed && reps >= repsEntryTarget { return }
+                        showingRepsEntry = false
                         Task {
-                            await model.submitCurrentSet(using: api, mode: amrapMode, amrapReps: reps)
+                            await model.submitCurrentSet(using: api, mode: repsEntryMode, repsOverride: reps)
                         }
                     }
                 )
+                .presentationDetents([.height(230)])
             }
         }
     }
@@ -353,7 +358,7 @@ struct WorkoutView: View {
             .frame(height: 110)
 
             VStack(alignment: .trailing, spacing: 4) {
-                Text(heartRate.latestBpm.map { "\($0) bpm" } ?? "—")
+                Text(heartRate.latestBpm.map { "\($0)" } ?? "—")
                     .font(.system(size: 34, weight: .bold, design: .rounded))
                     .foregroundStyle(.green)
             }
@@ -424,12 +429,14 @@ struct WorkoutView: View {
         HStack(spacing: 10) {
             Button("Complete") {
                 if pending.setItem.isAmrap {
-                    amrapMode = .success
-                    amrapValue = "\(pending.targetReps)"
-                    showingAmrapEntry = true
+                    repsEntryMode = .success
+                    repsEntryTarget = pending.targetReps
+                    repsEntryIsAmrap = true
+                    repsEntryValue = "\(pending.targetReps)"
+                    showingRepsEntry = true
                 } else {
                     Task {
-                        await model.submitCurrentSet(using: api, mode: .success, amrapReps: nil)
+                        await model.submitCurrentSet(using: api, mode: .success, repsOverride: nil)
                     }
                 }
             }
@@ -437,15 +444,11 @@ struct WorkoutView: View {
             .frame(maxWidth: .infinity)
 
             Button("Fail") {
-                if pending.setItem.isAmrap {
-                    amrapMode = .failed
-                    amrapValue = "\(max(0, pending.targetReps - 1))"
-                    showingAmrapEntry = true
-                } else {
-                    Task {
-                        await model.submitCurrentSet(using: api, mode: .failed, amrapReps: nil)
-                    }
-                }
+                repsEntryMode = .failed
+                repsEntryTarget = pending.targetReps
+                repsEntryIsAmrap = pending.setItem.isAmrap
+                repsEntryValue = "\(max(0, pending.targetReps - 1))"
+                showingRepsEntry = true
             }
             .buttonStyle(.bordered)
             .frame(maxWidth: .infinity)
@@ -456,14 +459,14 @@ struct WorkoutView: View {
     private var bluetoothIndicator: some View {
         ZStack {
             Circle()
-                .fill(Color.white.opacity(0.14))
+                .fill(Color.black.opacity(0.55))
                 .overlay(
-                    Circle().stroke(Color.white.opacity(0.25), lineWidth: 1)
+                    Circle().stroke(Color.white.opacity(0.22), lineWidth: 1)
                 )
                 .frame(width: 44, height: 44)
 
-            Image(systemName: "bluetooth")
-                .font(.system(size: 19, weight: .bold))
+            Text("ᛒ")
+                .font(.system(size: 24, weight: .bold, design: .rounded))
                 .foregroundColor(heartRate.isReceivingData ? .blue : .gray)
 
             if !heartRate.isReceivingData {
@@ -558,25 +561,26 @@ private struct SegmentedDigit: View {
     }
 }
 
-private struct AmrapEntrySheet: View {
+private struct RepsEntrySheet: View {
     @Binding var value: String
     let mode: SetOutcome
     let target: Int
+    let isAmrap: Bool
     let onCancel: () -> Void
     let onSubmit: () -> Void
 
     var body: some View {
         NavigationStack {
             Form {
-                Section(mode == .success ? "AMRAP success" : "AMRAP failed") {
-                    Text(mode == .success ? "Enter reps (must be ≥ \(target))" : "Enter reps (must be < \(target))")
+                Section {
+                    Text("Enter number of completed reps")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                     TextField("Reps", text: $value)
                         .keyboardType(.numberPad)
                 }
             }
-            .navigationTitle("AMRAP")
+            .navigationTitle("Reps")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
