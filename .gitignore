@@ -35,3 +35,6 @@ id_ed25519.pub
 
 # Local logs
 *.log
+
+# Editor settings
+.idea/
