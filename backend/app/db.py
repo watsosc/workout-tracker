@@ -5,6 +5,7 @@ from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
+from sqlalchemy.schema import CreateIndex, CreateTable
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from .config import DATABASE_URL
@@ -155,6 +156,60 @@ def _migrate_workout_sessions_client_id(conn) -> None:
     )
 
 
+def _sqlite_column_is_not_null(conn, table_name: str, column: str) -> bool:
+    for row in conn.exec_driver_sql(f"PRAGMA table_info({table_name})").fetchall():
+        if row[1] == column:
+            return bool(row[3])
+    return False
+
+
+def _rebuild_table_from_model(conn, table) -> None:
+    """Recreate a table to match its SQLAlchemy model (SQLite can't ALTER column nullability).
+
+    Follows SQLite's recommended procedure: create the new table under a temporary name, copy the
+    shared columns, drop the old table, then rename. Other tables' foreign keys keep referring to
+    the original name, so they stay valid. Foreign key enforcement is off (SQLite default).
+    """
+    name = table.name
+    temp = f"{name}__rebuild"
+    old_columns = set(_sqlite_table_columns(conn, name))
+    shared = [c.name for c in table.columns if c.name in old_columns]
+    column_list = ", ".join(shared)
+
+    conn.exec_driver_sql(f"DROP TABLE IF EXISTS {temp}")
+    create_sql = str(CreateTable(table).compile(conn.engine)).strip()
+    create_sql = create_sql.replace(f"CREATE TABLE {name} ", f"CREATE TABLE {temp} ", 1)
+    conn.exec_driver_sql(create_sql)
+    conn.exec_driver_sql(f"INSERT INTO {temp} ({column_list}) SELECT {column_list} FROM {name}")
+    conn.exec_driver_sql(f"DROP TABLE {name}")
+    conn.exec_driver_sql(f"ALTER TABLE {temp} RENAME TO {name}")
+    for index in table.indexes:
+        conn.exec_driver_sql(str(CreateIndex(index).compile(conn.engine)))
+
+
+def _migrate_flexible_workouts(conn) -> None:
+    """Allow ad-hoc workouts and mid-workout exercise changes (nullable plan links), plus the
+    new name / progression_snapshot / skipped columns."""
+    from .models import SessionExerciseEntry, WorkoutSession  # avoid import cycle at module load
+
+    if _sqlite_table_exists(conn, "workout_sessions"):
+        columns = _sqlite_table_columns(conn, "workout_sessions")
+        if (
+            _sqlite_column_is_not_null(conn, "workout_sessions", "plan_run_id")
+            or "name" not in columns
+            or "progression_snapshot" not in columns
+        ):
+            _rebuild_table_from_model(conn, WorkoutSession.__table__)
+
+    if _sqlite_table_exists(conn, "session_exercise_entries") and _sqlite_column_is_not_null(
+        conn, "session_exercise_entries", "plan_workout_exercise_id"
+    ):
+        _rebuild_table_from_model(conn, SessionExerciseEntry.__table__)
+
+    if _sqlite_table_exists(conn, "session_sets") and "skipped" not in _sqlite_table_columns(conn, "session_sets"):
+        conn.exec_driver_sql("ALTER TABLE session_sets ADD COLUMN skipped BOOLEAN NOT NULL DEFAULT 0")
+
+
 def _migrate_users_password_hash(conn) -> None:
     if not _sqlite_table_exists(conn, "users"):
         return
@@ -216,6 +271,7 @@ def apply_sqlite_migrations() -> None:
         _migrate_plan_active_flags(conn)
         _migrate_workout_sessions_client_id(conn)
         _migrate_users_password_hash(conn)
+        _migrate_flexible_workouts(conn)
 
 
 @contextmanager

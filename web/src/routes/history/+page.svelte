@@ -1,15 +1,19 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		deleteWorkout,
 		fetchSessionHeartRateSamples,
 		fetchStravaConnection,
 		fetchWorkoutHistory,
-		sendWorkoutToStrava
+		fetchWorkoutSession,
+		sendWorkoutToStrava,
+		updateWorkout
 	} from '$lib/workout-api';
 	import { pushToast } from '$lib/toast';
 	import HeartRateChart from '$lib/components/heart-rate-chart.svelte';
 	import type { HeartRateSample, StravaConnection, WorkoutHistoryItem } from '$lib/types';
 	import {
+		convertUnitToKg,
 		displayWeightFromKg,
 		formatDate,
 		getPreferredWeightUnit,
@@ -79,6 +83,97 @@
 				}
 			})
 		);
+	}
+
+	type EditRow = {
+		id: number;
+		exerciseName: string;
+		setIndex: number;
+		// number inputs bind numbers (or null when empty)
+		reps: number | string | null;
+		weight: number | string | null;
+		completed: boolean;
+		originalWeightKg: number | null;
+	};
+	let editingSessionId = $state<number | null>(null);
+	let editRows = $state<EditRow[]>([]);
+
+	async function onEdit(item: WorkoutHistoryItem) {
+		loading = true;
+		try {
+			const session = await fetchWorkoutSession(item.sessionId);
+			if (!session) throw new Error('Workout not found');
+			editRows = session.entries.flatMap((entry) =>
+				entry.sets.map((setItem) => ({
+					id: setItem.id,
+					exerciseName: entry.exerciseName,
+					setIndex: setItem.setIndex,
+					reps: setItem.repsCompleted,
+					weight: Number(displayWeightFromKg(setItem.weightKg ?? entry.plannedWeightKg, weightUnit)),
+					completed: setItem.completed,
+					originalWeightKg: setItem.weightKg
+				}))
+			);
+			editingSessionId = item.sessionId;
+		} catch (error) {
+			pushToast(error instanceof Error ? error.message : String(error), 'error');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function onSaveEdit() {
+		const sessionId = editingSessionId;
+		if (sessionId === null) return;
+		const sets = [];
+		for (const row of editRows) {
+			const reps = row.reps === null || String(row.reps).trim() === '' ? null : Number(row.reps);
+			const weight = row.weight === null || String(row.weight).trim() === '' ? NaN : Number(row.weight);
+			if (row.completed && (reps === null || !Number.isInteger(reps) || reps < 0)) {
+				pushToast(`${row.exerciseName} set ${row.setIndex}: enter reps or untick it`, 'error');
+				return;
+			}
+			if (!Number.isFinite(weight) || weight < 0) {
+				pushToast(`${row.exerciseName} set ${row.setIndex}: weight must be 0 or more`, 'error');
+				return;
+			}
+			// Keep the exact stored kg value unless the displayed weight was changed.
+			const unchanged =
+				row.originalWeightKg !== null && Number(displayWeightFromKg(row.originalWeightKg, weightUnit)) === weight;
+			sets.push({
+				sessionSetId: row.id,
+				repsCompleted: row.completed ? reps : null,
+				weightKg: unchanged ? row.originalWeightKg : convertUnitToKg(weight, weightUnit),
+				completed: row.completed
+			});
+		}
+		loading = true;
+		try {
+			const result = await updateWorkout(sessionId, sets);
+			pushToast(result.message, 'success');
+			editingSessionId = null;
+			await loadHistory();
+		} catch (error) {
+			pushToast(error instanceof Error ? error.message : String(error), 'error');
+		} finally {
+			loading = false;
+		}
+	}
+
+	async function onDelete(item: WorkoutHistoryItem) {
+		if (!window.confirm(`Delete "${item.planWorkoutName}" from ${formatDate(item.finishedAt)}? This can't be undone.`)) {
+			return;
+		}
+		loading = true;
+		try {
+			const result = await deleteWorkout(item.sessionId);
+			pushToast(result.message, 'success');
+			await loadHistory();
+		} catch (error) {
+			pushToast(error instanceof Error ? error.message : String(error), 'error');
+		} finally {
+			loading = false;
+		}
 	}
 
 	async function onSendToStrava(item: WorkoutHistoryItem) {
@@ -174,8 +269,47 @@
 									<span class="subtle">Connect Strava in Settings</span>
 								{/if}
 							</div>
+							<div class="edit-row">
+								<button type="button" onclick={() => onEdit(item)} disabled={loading}>Edit</button>
+								<button type="button" class="danger" onclick={() => onDelete(item)} disabled={loading}>Delete</button>
+							</div>
 						</div>
 					</header>
+
+					{#if editingSessionId === item.sessionId}
+						<section class="edit-panel">
+							<p class="subtle">
+								Fix reps or weights. If this is your most recent workout, progression is recalculated;
+								otherwise only history, PRs and charts change.
+							</p>
+							<table>
+								<thead>
+									<tr>
+										<th>Exercise</th>
+										<th>Set</th>
+										<th>Done</th>
+										<th>Reps</th>
+										<th>Weight ({weightUnitLabel(weightUnit)})</th>
+									</tr>
+								</thead>
+								<tbody>
+									{#each editRows as row (row.id)}
+										<tr>
+											<td>{row.exerciseName}</td>
+											<td>{row.setIndex}</td>
+											<td><input type="checkbox" bind:checked={row.completed} aria-label="Set completed" /></td>
+											<td><input type="number" min="0" step="1" bind:value={row.reps} disabled={!row.completed} aria-label="Reps" /></td>
+											<td><input type="number" min="0" step="any" bind:value={row.weight} aria-label="Weight" /></td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+							<div class="edit-row">
+								<button type="button" class="primary" onclick={onSaveEdit} disabled={loading}>Save changes</button>
+								<button type="button" onclick={() => (editingSessionId = null)} disabled={loading}>Cancel</button>
+							</div>
+						</section>
+					{/if}
 
 					{#if item.heartRateSampleCount > 0}
 						<section class="hr-section">
@@ -227,6 +361,28 @@
 </section>
 
 <style>
+	.edit-row {
+		display: flex;
+		gap: 0.5rem;
+		justify-content: flex-end;
+	}
+
+	.edit-panel {
+		display: grid;
+		gap: 0.6rem;
+		border: 1px solid #334155;
+		border-radius: 10px;
+		padding: 0.7rem;
+	}
+
+	.edit-panel input[type='number'] {
+		width: 6rem;
+	}
+
+	.edit-panel input[type='checkbox'] {
+		width: auto;
+	}
+
 	.pr-badge {
 		margin-left: 0.35rem;
 		font-size: 0.72rem;

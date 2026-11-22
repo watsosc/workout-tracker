@@ -200,12 +200,13 @@ class SessionSetType:
     duration_seconds: int | None
     completed: bool
     completed_at: datetime | None
+    skipped: bool = False
 
 
 @strawberry.type
 class SessionExerciseEntryType:
     id: int
-    plan_workout_exercise_id: int
+    plan_workout_exercise_id: int | None
     exercise_id: int
     exercise_name: str
     planned_sets: int
@@ -281,7 +282,7 @@ class WorkoutSessionType:
     strava_activity_id: str | None
     strava_activity_url: str | None
     strava_last_error: str | None
-    plan_workout_id: int
+    plan_workout_id: int | None
     plan_workout_name: str
     entries: list[SessionExerciseEntryType]
     personal_records: list[PersonalRecordType]
@@ -308,7 +309,7 @@ class WorkoutHistoryExerciseType:
 @strawberry.type
 class WorkoutHistoryItemType:
     session_id: int
-    plan_run_id: int
+    plan_run_id: int | None
     finished_at: datetime | None
     plan_workout_name: str
     workout_sequence_index: int | None
@@ -453,11 +454,15 @@ class LoggedSetInput:
     duration_seconds: int | None = None
     completed: bool = False
     completed_at: datetime | None = None
+    skipped: bool = False
 
 
 @strawberry.input
 class LoggedEntryInput:
-    plan_workout_exercise_id: int
+    # Null for exercises added during the workout.
+    plan_workout_exercise_id: int | None = None
+    # Required when there's no plan exercise; if it differs from the plan exercise, it was swapped.
+    exercise_name: str | None = None
     planned_sets: int
     planned_reps: int
     planned_weight_kg: float
@@ -469,13 +474,31 @@ class LogWorkoutInput:
     """A complete workout recorded on a client (possibly offline) and uploaded afterwards."""
 
     client_id: str
-    plan_workout_id: int
+    # Null for ad-hoc workouts.
+    plan_workout_id: int | None = None
+    name: str | None = None
     started_at: datetime
     finished_at: datetime
     entries: list[LoggedEntryInput]
     heart_rate_samples: list[HeartRateSampleInput] = strawberry.field(default_factory=list)
     # Set when the client resumed a workout that was started on the server (e.g. from web).
     session_id: int | None = None
+
+
+@strawberry.input
+class SetEditInput:
+    session_set_id: int
+    reps_completed: int | None = None
+    weight_kg: float | None = None
+    completed: bool = True
+
+
+@strawberry.type
+class WorkoutEditResult:
+    ok: bool
+    message: str
+    progression_recalculated: bool
+    session: WorkoutSessionType | None = None
 
 
 @strawberry.type
@@ -775,8 +798,8 @@ def _ensure_strava_access_token(session, user_id: int, connection: OAuthConnecti
 
 
 def _build_strava_activity_payload(session, workout_session: WorkoutSession) -> dict[str, object]:
-    workout = session.get(PlanWorkout, workout_session.plan_workout_id)
-    run = session.get(PlanRun, workout_session.plan_run_id)
+    workout = _get_optional(session, PlanWorkout, workout_session.plan_workout_id)
+    run = _get_optional(session, PlanRun, workout_session.plan_run_id)
     plan = session.get(Plan, run.plan_id) if run else None
 
     entry_rows = session.scalars(
@@ -800,7 +823,7 @@ def _build_strava_activity_payload(session, workout_session: WorkoutSession) -> 
 
     start_local = _ensure_utc(workout_session.started_at).isoformat(timespec="seconds")
 
-    base_name = workout.name if workout else "Strength Workout"
+    base_name = workout.name if workout else (workout_session.name or "Strength Workout")
     if plan and plan.name.strip():
         name = f"{plan.name} · {base_name}"
     else:
@@ -1442,7 +1465,7 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
             .order_by(SessionSet.set_index.asc())
         ).all()
         exercise = session.get(Exercise, entry.exercise_id)
-        template = session.get(PlanWorkoutExercise, entry.plan_workout_exercise_id)
+        template = _get_optional(session, PlanWorkoutExercise, entry.plan_workout_exercise_id)
         protocol = (
             GQLProgressionProtocol(template.progression_protocol.value)
             if template
@@ -1465,17 +1488,7 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
                 tier=tier,
                 expected_rest_seconds=expected_rest,
                 sets=[
-                    SessionSetType(
-                        id=s.id,
-                        set_index=s.set_index,
-                        target_reps=s.target_reps,
-                        is_amrap=s.is_amrap,
-                        reps_completed=s.reps_completed,
-                        weight_kg=s.weight_kg,
-                        duration_seconds=s.duration_seconds,
-                        completed=s.completed,
-                        completed_at=s.completed_at,
-                    )
+                    _set_type(s)
                     for s in sets
                 ],
             )
@@ -1498,8 +1511,6 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
         personal_records = _personal_records_for_sessions(
             session, workout_session.user_id, {workout_session.id}
         )[workout_session.id]
-    plan_workout = session.get(PlanWorkout, workout_session.plan_workout_id)
-
     return WorkoutSessionType(
         id=workout_session.id,
         status=_map_status(workout_session.status),
@@ -1513,7 +1524,7 @@ def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSess
         strava_activity_url=export_row.remote_activity_url if export_row else None,
         strava_last_error=export_row.last_error if export_row else None,
         plan_workout_id=workout_session.plan_workout_id,
-        plan_workout_name=plan_workout.name if plan_workout else f"Workout {workout_session.plan_workout_id}",
+        plan_workout_name=_session_display_name(session, workout_session),
         entries=out_entries,
         personal_records=personal_records,
     )
@@ -1772,32 +1783,72 @@ def _prepare_workout(session, user_id: int, run: PlanRun, workout: PlanWorkout) 
     return prepared
 
 
+def _get_optional(session, model, ident):
+    return session.get(model, ident) if ident is not None else None
+
+
+def _session_display_name(session, ws: WorkoutSession) -> str:
+    if ws.name:
+        return ws.name
+    workout = _get_optional(session, PlanWorkout, ws.plan_workout_id)
+    return workout.name if workout else "Workout"
+
+
+def _prescribed_sets(entry: SessionExerciseEntry, sets: list[SessionSet]) -> list[SessionSet]:
+    """Sets that count for progression: the prescribed ones, not extras added mid-workout."""
+    return [s for s in sets if s.set_index <= entry.planned_sets]
+
+
+def _iso(dt: datetime | None) -> str | None:
+    return dt.isoformat() if dt else None
+
+
+def _from_iso(value: str | None) -> datetime | None:
+    return datetime.fromisoformat(value) if value else None
+
+
 def _apply_finish(session, ws: WorkoutSession, finished_at: datetime) -> None:
-    """Mark a session completed, run progression, and advance the plan run. Does not commit."""
+    """Mark a session completed, update 1RMs, run progression, and advance the plan run.
+
+    Records a snapshot of everything it changes on `ws.progression_snapshot` so the effect can be
+    undone if this workout is later edited or deleted. Does not commit.
+
+    Progression rules:
+    - Only plan exercises performed as planned (not swapped, not added) progress.
+    - An exercise with no completed sets (skipped) leaves its progression untouched.
+    - Only the prescribed sets count; extra sets added mid-workout don't affect pass/fail.
+    """
     ws.status = WorkoutSessionStatus.COMPLETED
     ws.finished_at = finished_at
+    run = _get_optional(session, PlanRun, ws.plan_run_id)
 
-    run = session.get(PlanRun, ws.plan_run_id)
-    if not run:
-        raise ValueError("Plan run not found for workout session")
+    snapshot: dict = {"baselines": {}, "states": [], "run": None}
+    if run is not None:
+        snapshot["run"] = {
+            "id": run.id,
+            "current_week": run.current_week,
+            "current_workout_index": run.current_workout_index,
+            "status": run.status.value,
+            "completed_at": _iso(run.completed_at),
+        }
 
     entries = session.scalars(
         select(SessionExerciseEntry).where(SessionExerciseEntry.session_id == ws.id)
     ).all()
 
     for entry in entries:
-        template = session.get(PlanWorkoutExercise, entry.plan_workout_exercise_id)
-        if not template:
-            continue
-
         sets = session.scalars(
             select(SessionSet)
             .where(SessionSet.entry_id == entry.id)
             .order_by(SessionSet.set_index.asc())
         ).all()
 
-        estimated_1rm = _estimated_1rm_from_sets(sets)
         baseline = _get_baseline(session, ws.user_id, entry.exercise_id)
+        key = str(entry.exercise_id)
+        if key not in snapshot["baselines"]:
+            snapshot["baselines"][key] = baseline.baseline_1rm_kg if baseline else None
+
+        estimated_1rm = _estimated_1rm_from_sets(sets)
         if estimated_1rm is not None:
             if baseline is None:
                 baseline = ExerciseBaseline(
@@ -1808,6 +1859,33 @@ def _apply_finish(session, ws: WorkoutSession, finished_at: datetime) -> None:
                 session.add(baseline)
             elif estimated_1rm > baseline.baseline_1rm_kg:
                 baseline.baseline_1rm_kg = estimated_1rm
+
+        template = _get_optional(session, PlanWorkoutExercise, entry.plan_workout_exercise_id)
+        if run is None or template is None or template.exercise_id != entry.exercise_id:
+            continue
+        if not any(s.completed for s in sets):
+            continue  # skipped entirely
+
+        existing_state = session.scalar(
+            select(RunExerciseState).where(
+                and_(
+                    RunExerciseState.plan_run_id == run.id,
+                    RunExerciseState.exercise_id == entry.exercise_id,
+                    RunExerciseState.tier.is_(None) if template.tier is None else RunExerciseState.tier == template.tier,
+                )
+            )
+        )
+        snapshot["states"].append(
+            {
+                "exercise_id": entry.exercise_id,
+                "tier": template.tier.value if template.tier else None,
+                "existed": existing_state is not None,
+                "current_weight_kg": existing_state.current_weight_kg if existing_state else None,
+                "failure_count": existing_state.failure_count if existing_state else None,
+                "needs_new_1rm": existing_state.needs_new_1rm if existing_state else None,
+                "last_completed_at": _iso(existing_state.last_completed_at) if existing_state else None,
+            }
+        )
 
         baseline_1rm_kg = baseline.baseline_1rm_kg if baseline else None
         state = _get_or_create_run_state(
@@ -1822,7 +1900,7 @@ def _apply_finish(session, ws: WorkoutSession, finished_at: datetime) -> None:
             template=template,
             state=state,
             baseline_1rm_kg=baseline_1rm_kg,
-            session_sets=sets,
+            session_sets=_prescribed_sets(entry, sets),
         )
 
         if result.needs_new_1rm and baseline_1rm_kg is not None:
@@ -1836,17 +1914,144 @@ def _apply_finish(session, ws: WorkoutSession, finished_at: datetime) -> None:
 
         state.last_completed_at = finished_at
 
-    plan = session.get(Plan, run.plan_id)
-    workouts = _get_workouts_in_plan(session, run.plan_id)
-    if workouts:
-        run.current_workout_index += 1
-        if run.current_workout_index >= len(workouts):
-            run.current_workout_index = 0
-            run.current_week += 1
+    if run is not None:
+        plan = session.get(Plan, run.plan_id)
+        workouts = _get_workouts_in_plan(session, run.plan_id)
+        if workouts:
+            run.current_workout_index += 1
+            if run.current_workout_index >= len(workouts):
+                run.current_workout_index = 0
+                run.current_week += 1
 
-            if plan and plan.total_weeks is not None and run.current_week > plan.total_weeks:
-                run.status = PlanRunStatus.COMPLETED
-                run.completed_at = _now_utc()
+                if plan and plan.total_weeks is not None and run.current_week > plan.total_weeks:
+                    run.status = PlanRunStatus.COMPLETED
+                    run.completed_at = _now_utc()
+
+    ws.progression_snapshot = snapshot
+
+
+def _is_latest_completed_workout(session, ws: WorkoutSession) -> bool:
+    latest = session.scalar(
+        select(WorkoutSession)
+        .where(
+            and_(
+                WorkoutSession.user_id == ws.user_id,
+                WorkoutSession.status == WorkoutSessionStatus.COMPLETED,
+            )
+        )
+        .order_by(WorkoutSession.finished_at.desc(), WorkoutSession.id.desc())
+    )
+    return latest is not None and latest.id == ws.id
+
+
+def _can_recalculate(session, ws: WorkoutSession) -> bool:
+    """Undoing a workout's effect is only safe for the most recent one with a snapshot.
+
+    Anything later may have built on its 1RMs/run state, so older workouts are edited as history only.
+    """
+    return bool(ws.progression_snapshot) and _is_latest_completed_workout(session, ws)
+
+
+def _restore_snapshot(session, ws: WorkoutSession) -> None:
+    """Undo the progression effects recorded by `_apply_finish`. Does not commit."""
+    snapshot = ws.progression_snapshot or {}
+
+    for key, value in (snapshot.get("baselines") or {}).items():
+        baseline = _get_baseline(session, ws.user_id, int(key))
+        if value is None:
+            if baseline is not None:
+                session.delete(baseline)
+        elif baseline is not None:
+            baseline.baseline_1rm_kg = value
+        else:
+            session.add(ExerciseBaseline(user_id=ws.user_id, exercise_id=int(key), baseline_1rm_kg=value))
+
+    run_snapshot = snapshot.get("run")
+    run = session.get(PlanRun, run_snapshot["id"]) if run_snapshot else None
+    if run is not None:
+        for item in snapshot.get("states") or []:
+            tier = ExerciseTier(item["tier"]) if item["tier"] else None
+            state = session.scalar(
+                select(RunExerciseState).where(
+                    and_(
+                        RunExerciseState.plan_run_id == run.id,
+                        RunExerciseState.exercise_id == item["exercise_id"],
+                        RunExerciseState.tier.is_(None) if tier is None else RunExerciseState.tier == tier,
+                    )
+                )
+            )
+            if not item["existed"]:
+                if state is not None:
+                    session.delete(state)
+                continue
+            if state is None:
+                continue
+            state.current_weight_kg = item["current_weight_kg"]
+            state.failure_count = item["failure_count"]
+            state.needs_new_1rm = item["needs_new_1rm"]
+            state.last_completed_at = _from_iso(item["last_completed_at"])
+
+        run.current_week = run_snapshot["current_week"]
+        run.current_workout_index = run_snapshot["current_workout_index"]
+        run.status = PlanRunStatus(run_snapshot["status"])
+        run.completed_at = _from_iso(run_snapshot["completed_at"])
+
+    ws.progression_snapshot = None
+    session.flush()
+
+
+def _delete_session_rows(session, ws: WorkoutSession) -> None:
+    entry_ids = session.scalars(
+        select(SessionExerciseEntry.id).where(SessionExerciseEntry.session_id == ws.id)
+    ).all()
+    if entry_ids:
+        session.execute(delete(SessionSet).where(SessionSet.entry_id.in_(entry_ids)))
+        session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
+    session.execute(delete(HeartRateSample).where(HeartRateSample.session_id == ws.id))
+    session.execute(delete(WorkoutExport).where(WorkoutExport.session_id == ws.id))
+    session.execute(delete(WorkoutSession).where(WorkoutSession.id == ws.id))
+
+
+def _in_progress_entry(session, user_id: int, entry_id: int) -> tuple[SessionExerciseEntry, WorkoutSession]:
+    entry = session.get(SessionExerciseEntry, entry_id)
+    ws = session.get(WorkoutSession, entry.session_id) if entry else None
+    if not entry or not ws or ws.user_id != user_id:
+        raise ValueError("Exercise not found in workout")
+    if ws.status != WorkoutSessionStatus.IN_PROGRESS:
+        raise ValueError("The workout is no longer in progress")
+    return entry, ws
+
+
+def _entry_sets(session, entry_id: int) -> list[SessionSet]:
+    return list(
+        session.scalars(
+            select(SessionSet).where(SessionSet.entry_id == entry_id).order_by(SessionSet.set_index.asc())
+        ).all()
+    )
+
+
+def _add_ad_hoc_entry(
+    session, ws: WorkoutSession, exercise_name: str, sets: int, reps: int, weight_kg: float
+) -> SessionExerciseEntry:
+    name = exercise_name.strip()
+    if not name:
+        raise ValueError("Exercise name is required")
+    if sets <= 0 or sets > 20 or reps <= 0 or weight_kg < 0:
+        raise ValueError("Use 1-20 sets, reps > 0 and a weight >= 0")
+    exercise = _get_or_create_exercise_by_name(session, name)
+    entry = SessionExerciseEntry(
+        session_id=ws.id,
+        plan_workout_exercise_id=None,
+        exercise_id=exercise.id,
+        planned_sets=sets,
+        planned_reps=reps,
+        planned_weight_kg=weight_kg,
+    )
+    session.add(entry)
+    session.flush()
+    for index in range(1, sets + 1):
+        session.add(SessionSet(entry_id=entry.id, set_index=index, target_reps=reps, weight_kg=weight_kg))
+    return entry
 
 
 def _maybe_auto_send_to_strava(session, ws: WorkoutSession) -> None:
@@ -1903,6 +2108,7 @@ def _set_type(sset: SessionSet) -> SessionSetType:
         duration_seconds=sset.duration_seconds,
         completed=sset.completed,
         completed_at=sset.completed_at,
+        skipped=bool(sset.skipped),
     )
 
 
@@ -2040,6 +2246,15 @@ class Query:
             signed_in=ctx.get("user_id") is not None,
             username=ctx.get("username"),
         )
+
+    @strawberry.field
+    def workout_session(self, session_id: int) -> WorkoutSessionType | None:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ws = session.get(WorkoutSession, session_id)
+            if not ws or ws.user_id != user.id:
+                return None
+            return _build_session_type(session, ws)
 
     @strawberry.field
     def workout_prescription(self, plan_workout_id: int | None = None) -> WorkoutPrescriptionType | None:
@@ -2287,7 +2502,7 @@ class Query:
             )
             out: list[WorkoutHistoryItemType] = []
             for s in sessions:
-                workout = session.get(PlanWorkout, s.plan_workout_id)
+                workout = _get_optional(session, PlanWorkout, s.plan_workout_id)
                 entry_rows = session.scalars(
                     select(SessionExerciseEntry).where(SessionExerciseEntry.session_id == s.id)
                 ).all()
@@ -2339,7 +2554,7 @@ class Query:
                         session_id=s.id,
                         plan_run_id=s.plan_run_id,
                         finished_at=s.finished_at,
-                        plan_workout_name=workout.name if workout else f"Workout {s.plan_workout_id}",
+                        plan_workout_name=_session_display_name(session, s),
                         workout_sequence_index=workout.sequence_index if workout else None,
                         total_sets=len(set_rows),
                         completed_sets=len(completed_rows),
@@ -3327,6 +3542,7 @@ class Mutation:
             sset = _in_progress_set(session, user.id, session_set_id)
 
             sset.reps_completed = reps_completed
+            sset.skipped = False
             sset.weight_kg = weight_kg if weight_kg is not None else sset.weight_kg
             sset.duration_seconds = duration_seconds
             sset.completed = True
@@ -3352,7 +3568,8 @@ class Mutation:
         """Record a whole workout in one call (used by the offline-capable iOS app).
 
         Idempotent on `client_id`: retrying an upload that already succeeded returns the stored
-        session instead of logging it twice.
+        session instead of logging it twice. Supports ad-hoc workouts (no plan_workout_id),
+        exercises added or swapped mid-workout (exercise_name), extra sets and skipped sets.
         """
         client_id = input.client_id.strip()
         if not client_id or len(client_id) > 64:
@@ -3367,17 +3584,24 @@ class Mutation:
             if existing:
                 return _build_session_type(session, existing)
 
-            plan_workout = session.get(PlanWorkout, input.plan_workout_id)
-            plan = session.get(Plan, plan_workout.plan_id) if plan_workout else None
-            if not plan_workout or not plan or plan.user_id != user.id:
-                raise ValueError("plan_workout_id not found")
+            plan_workout: PlanWorkout | None = None
+            plan: Plan | None = None
+            templates: dict[int, PlanWorkoutExercise] = {}
+            if input.plan_workout_id is not None:
+                plan_workout = session.get(PlanWorkout, input.plan_workout_id)
+                plan = session.get(Plan, plan_workout.plan_id) if plan_workout else None
+                if not plan_workout or not plan or plan.user_id != user.id:
+                    raise ValueError("plan_workout_id not found")
+                templates = {t.id: t for t in _get_plan_templates_for_workout(session, plan_workout.id)}
 
-            templates = {t.id: t for t in _get_plan_templates_for_workout(session, plan_workout.id)}
             for entry_in in input.entries:
-                if entry_in.plan_workout_exercise_id not in templates:
-                    raise ValueError(
-                        f"plan_workout_exercise_id {entry_in.plan_workout_exercise_id} is not part of this workout"
-                    )
+                if entry_in.plan_workout_exercise_id is not None:
+                    if entry_in.plan_workout_exercise_id not in templates:
+                        raise ValueError(
+                            f"plan_workout_exercise_id {entry_in.plan_workout_exercise_id} is not part of this workout"
+                        )
+                elif not (entry_in.exercise_name or "").strip():
+                    raise ValueError("exercise_name is required for exercises that aren't in the plan")
 
             if input.session_id is not None:
                 ws = _get_user_session(session, user.id, input.session_id)
@@ -3385,7 +3609,7 @@ class Mutation:
                     return _build_session_type(session, ws)
                 if ws.status != WorkoutSessionStatus.IN_PROGRESS:
                     raise ValueError("That workout was cancelled on the server")
-                if ws.plan_workout_id != plan_workout.id:
+                if ws.plan_workout_id != input.plan_workout_id:
                     raise ValueError("session_id does not match plan_workout_id")
                 # The client's copy is authoritative: replace whatever the server had.
                 old_entry_ids = session.scalars(
@@ -3398,16 +3622,21 @@ class Mutation:
                     )
                 ws.client_id = client_id
                 ws.started_at = _to_utc_naive(input.started_at)
+                if input.name:
+                    ws.name = input.name.strip()[:120]
             else:
-                run = _latest_active_run(session, plan.id) or session.scalar(
-                    select(PlanRun).where(PlanRun.plan_id == plan.id).order_by(PlanRun.id.desc())
-                )
-                if run is None:
-                    run = _start_plan_run(session, user.id, plan.id)
+                run: PlanRun | None = None
+                if plan is not None:
+                    run = _latest_active_run(session, plan.id) or session.scalar(
+                        select(PlanRun).where(PlanRun.plan_id == plan.id).order_by(PlanRun.id.desc())
+                    )
+                    if run is None:
+                        run = _start_plan_run(session, user.id, plan.id)
                 ws = WorkoutSession(
                     user_id=user.id,
-                    plan_run_id=run.id,
-                    plan_workout_id=plan_workout.id,
+                    plan_run_id=run.id if run else None,
+                    plan_workout_id=plan_workout.id if plan_workout else None,
+                    name=(input.name or "").strip()[:120] or (None if plan_workout else "Workout"),
                     status=WorkoutSessionStatus.IN_PROGRESS,
                     started_at=_to_utc_naive(input.started_at),
                     client_id=client_id,
@@ -3416,11 +3645,16 @@ class Mutation:
                 session.flush()
 
             for entry_in in input.entries:
-                template = templates[entry_in.plan_workout_exercise_id]
+                template = templates.get(entry_in.plan_workout_exercise_id) if entry_in.plan_workout_exercise_id else None
+                name = (entry_in.exercise_name or "").strip()
+                if name:
+                    exercise_id = _get_or_create_exercise_by_name(session, name).id
+                else:
+                    exercise_id = template.exercise_id  # validated above
                 entry = SessionExerciseEntry(
                     session_id=ws.id,
-                    plan_workout_exercise_id=template.id,
-                    exercise_id=template.exercise_id,
+                    plan_workout_exercise_id=template.id if template else None,
+                    exercise_id=exercise_id,
                     planned_sets=entry_in.planned_sets,
                     planned_reps=entry_in.planned_reps,
                     planned_weight_kg=entry_in.planned_weight_kg,
@@ -3441,6 +3675,7 @@ class Mutation:
                             set_index=set_in.set_index,
                             target_reps=set_in.target_reps,
                             is_amrap=set_in.is_amrap,
+                            skipped=bool(set_in.skipped and not completed),
                             reps_completed=set_in.reps_completed if completed else None,
                             weight_kg=set_in.weight_kg if set_in.weight_kg is not None else entry_in.planned_weight_kg,
                             duration_seconds=set_in.duration_seconds if completed else None,
@@ -3459,6 +3694,190 @@ class Mutation:
             session.commit()
             _maybe_auto_send_to_strava(session, ws)
             return _build_session_type(session, ws)
+
+    # ------------------------------------------------------------ mid-workout changes (web)
+
+    @strawberry.mutation
+    def start_empty_workout(self, name: str | None = None) -> WorkoutSessionType:
+        """Start an ad-hoc workout that isn't part of a plan (no progression)."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            existing = session.scalar(
+                select(WorkoutSession).where(
+                    and_(
+                        WorkoutSession.user_id == user.id,
+                        WorkoutSession.status == WorkoutSessionStatus.IN_PROGRESS,
+                    )
+                )
+            )
+            if existing:
+                raise ValueError("Finish or discard the workout in progress first")
+            ws = WorkoutSession(
+                user_id=user.id,
+                name=(name or "").strip()[:120] or "Workout",
+                status=WorkoutSessionStatus.IN_PROGRESS,
+            )
+            session.add(ws)
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def add_exercise_to_workout(
+        self, session_id: int, exercise_name: str, sets: int = 3, reps: int = 10, weight_kg: float = 0.0
+    ) -> WorkoutSessionType:
+        with db_session() as session:
+            user = _get_default_user(session)
+            ws = _get_user_session(session, user.id, session_id)
+            if ws.status != WorkoutSessionStatus.IN_PROGRESS:
+                raise ValueError("The workout is no longer in progress")
+            _add_ad_hoc_entry(session, ws, exercise_name, sets, reps, weight_kg)
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def swap_exercise(self, entry_id: int, exercise_name: str) -> WorkoutSessionType:
+        """Do a different exercise in this slot (e.g. leg press instead of squat). No progression."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            entry, ws = _in_progress_entry(session, user.id, entry_id)
+            if not exercise_name.strip():
+                raise ValueError("Exercise name is required")
+            entry.exercise_id = _get_or_create_exercise_by_name(session, exercise_name).id
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def skip_exercise(self, entry_id: int) -> WorkoutSessionType:
+        """Skip the rest of an exercise. Skipping it entirely leaves its progression unchanged;
+        skipping after some sets counts as not completing the prescription."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            entry, ws = _in_progress_entry(session, user.id, entry_id)
+            for sset in _entry_sets(session, entry.id):
+                if not sset.completed:
+                    sset.skipped = True
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def unskip_exercise(self, entry_id: int) -> WorkoutSessionType:
+        with db_session() as session:
+            user = _get_default_user(session)
+            entry, ws = _in_progress_entry(session, user.id, entry_id)
+            for sset in _entry_sets(session, entry.id):
+                sset.skipped = False
+            session.commit()
+            return _build_session_type(session, ws)
+
+    @strawberry.mutation
+    def add_set(self, entry_id: int) -> WorkoutSessionType:
+        """Add an extra set (same target and weight as the last one). Extra sets don't affect progression."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            entry, ws = _in_progress_entry(session, user.id, entry_id)
+            sets = _entry_sets(session, entry.id)
+            if len(sets) >= 30:
+                raise ValueError("That's enough sets")
+            last = sets[-1] if sets else None
+            session.add(
+                SessionSet(
+                    entry_id=entry.id,
+                    set_index=(last.set_index + 1) if last else 1,
+                    target_reps=last.target_reps if last else entry.planned_reps,
+                    weight_kg=last.weight_kg if last and last.weight_kg is not None else entry.planned_weight_kg,
+                )
+            )
+            # Adding a set means the exercise isn't finished, so un-skip it.
+            for sset in sets:
+                sset.skipped = False
+            session.commit()
+            return _build_session_type(session, ws)
+
+    # ------------------------------------------------------------ editing past workouts
+
+    @strawberry.mutation
+    def update_workout(self, session_id: int, sets: list[SetEditInput]) -> WorkoutEditResult:
+        """Correct reps/weights of a finished workout.
+
+        For the most recent workout, its progression effect is undone and re-applied with the
+        corrected sets. Older workouts are corrected in history (PRs, charts) only.
+        """
+        with db_session() as session:
+            user = _get_default_user(session)
+            ws = _get_user_session(session, user.id, session_id)
+            if ws.status != WorkoutSessionStatus.COMPLETED:
+                return WorkoutEditResult(ok=False, message="Only finished workouts can be edited", progression_recalculated=False)
+
+            set_ids = {
+                sid
+                for sid in session.scalars(
+                    select(SessionSet.id)
+                    .join(SessionExerciseEntry, SessionExerciseEntry.id == SessionSet.entry_id)
+                    .where(SessionExerciseEntry.session_id == ws.id)
+                ).all()
+            }
+            for edit in sets:
+                if edit.session_set_id not in set_ids:
+                    return WorkoutEditResult(ok=False, message="Set is not part of this workout", progression_recalculated=False)
+                if edit.completed and (edit.reps_completed is None or edit.reps_completed < 0):
+                    return WorkoutEditResult(ok=False, message="Completed sets need reps >= 0", progression_recalculated=False)
+                if edit.weight_kg is not None and edit.weight_kg < 0:
+                    return WorkoutEditResult(ok=False, message="Weight must be >= 0", progression_recalculated=False)
+
+            recalculate = _can_recalculate(session, ws)
+            if recalculate:
+                _restore_snapshot(session, ws)
+
+            for edit in sets:
+                sset = session.get(SessionSet, edit.session_set_id)
+                if edit.weight_kg is not None:
+                    sset.weight_kg = edit.weight_kg
+                if edit.completed:
+                    sset.completed = True
+                    sset.skipped = False
+                    sset.reps_completed = edit.reps_completed
+                    sset.completed_at = sset.completed_at or ws.finished_at
+                else:
+                    sset.completed = False
+                    sset.reps_completed = None
+                    sset.completed_at = None
+
+            if recalculate:
+                session.flush()
+                _apply_finish(session, ws, ws.finished_at or _now_utc())
+            session.commit()
+            message = (
+                "Workout updated and progression recalculated"
+                if recalculate
+                else "Workout updated. Progression wasn't recalculated because later workouts build on it."
+            )
+            return WorkoutEditResult(
+                ok=True, message=message, progression_recalculated=recalculate, session=_build_session_type(session, ws)
+            )
+
+    @strawberry.mutation
+    def delete_workout(self, session_id: int) -> WorkoutEditResult:
+        """Delete a finished workout. Undoes its progression if it's the most recent one."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            ws = _get_user_session(session, user.id, session_id)
+            if ws.status == WorkoutSessionStatus.IN_PROGRESS:
+                return WorkoutEditResult(
+                    ok=False, message="Discard the workout in progress instead", progression_recalculated=False
+                )
+            was_completed = ws.status == WorkoutSessionStatus.COMPLETED
+            recalculate = was_completed and _can_recalculate(session, ws)
+            if recalculate:
+                _restore_snapshot(session, ws)
+            _delete_session_rows(session, ws)
+            session.commit()
+            if recalculate:
+                message = "Workout deleted and its progression undone"
+            elif was_completed:
+                message = "Workout deleted. Progression wasn't changed because later workouts build on it."
+            else:
+                message = "Workout deleted"
+            return WorkoutEditResult(ok=True, message=message, progression_recalculated=recalculate)
 
     @strawberry.mutation
     def set_exercise_one_rep_max(

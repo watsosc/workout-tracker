@@ -57,6 +57,42 @@ struct WorkoutAPI {
         ).logWorkout
     }
 
+    func fetchExerciseNames() async throws -> [String] {
+        struct Exercise: Decodable { let name: String }
+        struct Data: Decodable { let exercises: [Exercise] }
+        return try await client.execute("query { exercises { name } }", dataType: Data.self).exercises.map(\.name)
+    }
+
+    func fetchWorkoutSession(id: Int) async throws -> WorkoutSession? {
+        struct Data: Decodable { let workoutSession: WorkoutSession? }
+        let query = Self.activeSessionQuery
+            .replacingOccurrences(of: "query ActiveSession {", with: "query WorkoutSession($id: Int!) {")
+            .replacingOccurrences(of: "activeWorkoutSession {", with: "workoutSession(sessionId: $id) {")
+        return try await client.execute(query, variables: ["id": id], dataType: Data.self).workoutSession
+    }
+
+    func updateWorkout(sessionId: Int, sets: [[String: Any]]) async throws -> WorkoutEditResult {
+        struct Data: Decodable { let updateWorkout: WorkoutEditResult }
+        let result = try await client.execute(
+            "mutation($s: Int!, $sets: [SetEditInput!]!) { updateWorkout(sessionId: $s, sets: $sets) { ok message progressionRecalculated } }",
+            variables: ["s": sessionId, "sets": sets],
+            dataType: Data.self
+        ).updateWorkout
+        guard result.ok else { throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message]) }
+        return result
+    }
+
+    func deleteWorkout(sessionId: Int) async throws -> WorkoutEditResult {
+        struct Data: Decodable { let deleteWorkout: WorkoutEditResult }
+        let result = try await client.execute(
+            "mutation($s: Int!) { deleteWorkout(sessionId: $s) { ok message progressionRecalculated } }",
+            variables: ["s": sessionId],
+            dataType: Data.self
+        ).deleteWorkout
+        guard result.ok else { throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message]) }
+        return result
+    }
+
     func cancelWorkout(sessionId: Int) async throws {
         struct Data: Decodable { let cancelWorkout: MutationResult }
         // ok=false here only means there was nothing left to cancel; either way we're done.
@@ -311,7 +347,7 @@ private extension WorkoutAPI {
                 progressionProtocol
                 tier
                 expectedRestSeconds
-                sets { id setIndex targetReps isAmrap repsCompleted weightKg durationSeconds completed completedAt }
+                sets { id setIndex targetReps isAmrap repsCompleted weightKg durationSeconds completed completedAt skipped }
             }
         }
     }
@@ -365,6 +401,7 @@ private extension WorkoutAPI {
                     durationSeconds
                     completed
                     completedAt
+                    skipped
                 }
             }
         }

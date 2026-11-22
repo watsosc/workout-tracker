@@ -45,6 +45,9 @@ enum GraphQLClientError: Error, LocalizedError {
 }
 
 struct GraphQLClient {
+    /// Overridable so tests can stub the network (see WorkoutTrackerIOSTests/StubURLProtocol).
+    static var urlSession: URLSession = .shared
+
     let endpoint: String
     var token: String? = nil
     var timeout: TimeInterval = 30
@@ -69,7 +72,7 @@ struct GraphQLClient {
         }
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        let (data, response) = try await Self.urlSession.data(for: request)
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
             throw GraphQLClientError.httpStatus(http.statusCode)
         }

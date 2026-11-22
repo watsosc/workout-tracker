@@ -1,30 +1,37 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		addExerciseToWorkout,
+		addSet,
 		cancelWorkout,
 		completeSet,
 		fetchActivePlan,
 		fetchActiveSession,
 		fetchDashboard,
+		fetchExerciseNames,
 		finishWorkout,
+		skipExercise,
+		startEmptyWorkout,
 		startWorkout,
-		uncompleteSet
+		swapExercise,
+		uncompleteSet,
+		unskipExercise
 	} from '$lib/workout-api';
-	import type {
-		ActivePlan,
-		Dashboard,
-		PersonalRecord,
-		SessionEntry,
-		SessionSet,
-		WorkoutSession
-	} from '$lib/types';
-	import { formatPlates, usesBarbell, warmupSets, type WarmupSet } from '$lib/barbell';
+	import type { ActivePlan, Dashboard, PersonalRecord, WorkoutSession } from '$lib/types';
 	import { pushToast } from '$lib/toast';
+	import { formatPlates, usesBarbell, warmupSets, type WarmupSet } from '$lib/barbell';
 	import {
+		entryStatus,
+		lastCompletedSet,
+		pendingSet,
+		validateReps,
+		type PendingSet
+	} from '$lib/workout-logic';
+	import {
+		convertUnitToKg,
 		displayWeightFromKg,
 		getPreferredWeightUnit,
 		onWeightUnitChange,
-		parseNonNegativeInt,
 		type WeightUnit,
 		weightUnitLabel
 	} from '$lib/ui';
@@ -37,11 +44,12 @@
 		tier?: string | null;
 	};
 
-	type PendingSetContext = {
-		entry: SessionEntry;
-		setItem: SessionSet;
-		targetReps: number;
-		weightKg: number;
+	type PromptRequest = {
+		title: string;
+		inputType: 'number' | 'text';
+		initial: string;
+		hint?: string;
+		validate: (value: string) => string | null;
 	};
 
 	let loading = $state(false);
@@ -53,13 +61,21 @@
 	let weightUnit = $state<WeightUnit>('lb');
 	let timerSeconds = $state(0);
 	let timerHandle: ReturnType<typeof setInterval> | null = null;
-	let amrapPromptOpen = $state(false);
-	let amrapPromptMode = $state<'success' | 'fail'>('success');
-	let amrapPromptTargetReps = $state(0);
-	let amrapPromptInput = $state('');
-	let amrapPromptError = $state('');
-	let amrapPromptResolver: ((value: number | null) => void) | null = null;
 	let exitMenuOpen = $state(false);
+	let exercisesOpen = $state(false);
+	let exerciseNames = $state<string[]>([]);
+	/** Weight chosen for an exercise during this workout (entry id -> kg). */
+	let weightOverrides = $state<Record<number, number>>({});
+
+	let prompt = $state<PromptRequest | null>(null);
+	let promptValue = $state('');
+	let promptError = $state('');
+	let promptResolver: ((value: string | null) => void) | null = null;
+
+	let addName = $state('');
+	let addSets = $state('3');
+	let addReps = $state('10');
+	let addWeight = $state('0');
 
 	function stopSetTimer() {
 		if (timerHandle) {
@@ -99,75 +115,42 @@
 		return (DIGIT_SEGMENTS[glyph] ?? '').includes(segment);
 	}
 
-	function currentPendingSet(session: WorkoutSession | null = activeSession): PendingSetContext | null {
-		if (!session) return null;
-		for (const entry of session.entries) {
-			for (const setItem of entry.sets) {
-				if (setItem.completed) continue;
-				return {
-					entry,
-					setItem,
-					targetReps: setItem.targetReps ?? entry.plannedReps,
-					weightKg: setItem.weightKg ?? entry.plannedWeightKg
-				};
-			}
-		}
-		return null;
-	}
-
-	function lastCompletedSet(session: WorkoutSession | null = activeSession): SessionSet | null {
-		if (!session) return null;
-		let last: SessionSet | null = null;
-		for (const entry of session.entries) {
-			for (const setItem of entry.sets) {
-				if (setItem.completed) last = setItem;
-			}
-		}
-		return last;
+	function current(): PendingSet | null {
+		return pendingSet(activeSession, weightOverrides);
 	}
 
 	function displayWeight(weightKg: number): number {
 		return Number(displayWeightFromKg(weightKg, weightUnit));
 	}
 
+	function unitLabel(): string {
+		return weightUnitLabel(weightUnit);
+	}
+
 	function currentIsBarbell(): boolean {
-		const current = currentPendingSet();
-		return Boolean(current && usesBarbell(current.entry.equipmentType, current.entry.tier));
+		const c = current();
+		return Boolean(c && usesBarbell(c.entry.equipmentType, c.entry.tier));
 	}
 
 	/** Warm-ups are shown before the first working set of a barbell lift. */
 	function currentWarmups(): WarmupSet[] {
-		const current = currentPendingSet();
-		if (!current || !currentIsBarbell()) return [];
-		if (current.entry.sets.some((setItem) => setItem.completed)) return [];
-		return warmupSets(displayWeight(current.weightKg), weightUnit);
+		const c = current();
+		if (!c || !currentIsBarbell()) return [];
+		if (c.entry.sets.some((setItem) => setItem.completed)) return [];
+		return warmupSets(displayWeight(c.weightKg), weightUnit);
 	}
 
 	function describeRecord(pr: PersonalRecord): string {
-		const value = `${displayWeightFromKg(pr.valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
+		const value = `${displayWeightFromKg(pr.valueKg, weightUnit)} ${unitLabel()}`;
 		return pr.kind === 'WEIGHT'
 			? `${pr.exerciseName} heaviest: ${value} × ${pr.reps}`
 			: `${pr.exerciseName} est. 1RM: ${value}`;
 	}
 
 	function workoutPreviewRows(): WorkoutPreviewRow[] {
-		if (activeSession) {
-			return activeSession.entries.map((entry) => ({
-				name: entry.exerciseName,
-				sets: entry.plannedSets,
-				reps: entry.plannedReps,
-				weightKg: entry.plannedWeightKg,
-				tier: null
-			}));
-		}
-
 		if (!activePlan || activePlan.workouts.length === 0) return [];
-		const index = Math.min(
-			Math.max(activePlan.currentWorkoutIndex, 0),
-			activePlan.workouts.length - 1
-		);
-		const workout = activePlan.workouts[index];
-		return workout.exercises.map((exercise) => ({
+		const index = Math.min(Math.max(activePlan.currentWorkoutIndex, 0), activePlan.workouts.length - 1);
+		return activePlan.workouts[index].exercises.map((exercise) => ({
 			name: exercise.exerciseName,
 			sets: exercise.sets,
 			reps: exercise.reps,
@@ -178,10 +161,7 @@
 
 	function upcomingWorkoutName(): string | null {
 		if (!activePlan || activePlan.workouts.length === 0) return null;
-		const index = Math.min(
-			Math.max(activePlan.currentWorkoutIndex, 0),
-			activePlan.workouts.length - 1
-		);
+		const index = Math.min(Math.max(activePlan.currentWorkoutIndex, 0), activePlan.workouts.length - 1);
 		return activePlan.workouts[index]?.name ?? null;
 	}
 
@@ -191,14 +171,11 @@
 	}
 
 	async function loadWorkoutPage() {
-		const [plan, dash, session] = await Promise.all([
-			fetchActivePlan(),
-			fetchDashboard(),
-			fetchActiveSession()
-		]);
+		const [plan, dash, session] = await Promise.all([fetchActivePlan(), fetchDashboard(), fetchActiveSession()]);
 		activePlan = plan;
 		dashboard = dash;
 		activeSession = session;
+		if (!session) weightOverrides = {};
 		syncSessionUiState();
 	}
 
@@ -222,10 +199,7 @@
 		}
 	}
 
-	function showFinishAndStravaToast(
-		result: WorkoutSession | undefined,
-		baseMessage: string
-	) {
+	function showFinishAndStravaToast(result: WorkoutSession | undefined, baseMessage: string) {
 		if (!result) return;
 		const status = result.stravaExportStatus;
 		if (status === 'SENT') {
@@ -252,79 +226,180 @@
 		}
 	}
 
-	function openAmrapPrompt(
-		targetReps: number,
-		mode: 'success' | 'fail'
-	): Promise<number | null> {
-		amrapPromptOpen = true;
-		amrapPromptMode = mode;
-		amrapPromptTargetReps = targetReps;
-		amrapPromptInput = mode === 'success' ? String(targetReps) : String(Math.max(0, targetReps - 1));
-		amrapPromptError = '';
+	// ------------------------------------------------------------ generic prompt dialog
+
+	function openPrompt(request: PromptRequest): Promise<string | null> {
+		prompt = request;
+		promptValue = request.initial;
+		promptError = '';
 		return new Promise((resolve) => {
-			amrapPromptResolver = resolve;
+			promptResolver = resolve;
 		});
 	}
 
-	function closeAmrapPrompt(value: number | null) {
-		amrapPromptOpen = false;
-		const resolve = amrapPromptResolver;
-		amrapPromptResolver = null;
-		if (resolve) resolve(value);
+	function closePrompt(value: string | null) {
+		prompt = null;
+		const resolve = promptResolver;
+		promptResolver = null;
+		resolve?.(value);
 	}
 
-	function submitAmrapPrompt() {
-		try {
-			const reps = parseNonNegativeInt(amrapPromptInput, 'AMRAP reps');
-			if (amrapPromptMode === 'success' && reps < amrapPromptTargetReps) {
-				throw new Error(`AMRAP reps must be >= ${amrapPromptTargetReps}`);
-			}
-			if (amrapPromptMode === 'fail' && reps >= amrapPromptTargetReps) {
-				throw new Error(`AMRAP reps must be < ${amrapPromptTargetReps} for a failed set`);
-			}
-			closeAmrapPrompt(reps);
-		} catch (error) {
-			amrapPromptError = error instanceof Error ? error.message : String(error);
+	function submitPrompt() {
+		if (!prompt) return;
+		const problem = prompt.validate(String(promptValue).trim());
+		if (problem) {
+			promptError = problem;
+			return;
 		}
+		closePrompt(String(promptValue).trim());
 	}
+
+	function validateWeight(value: string): string | null {
+		const n = Number(value);
+		return Number.isFinite(n) && n >= 0 ? null : 'Enter a weight of 0 or more';
+	}
+
+	// ------------------------------------------------------------ set actions
 
 	async function submitCurrentSet(mode: 'success' | 'fail') {
-		const current = currentPendingSet();
-		if (!current) return;
+		const c = current();
+		if (!c) return;
 
-		let reps = current.targetReps;
-		if (current.setItem.isAmrap) {
-			const amrapReps = await openAmrapPrompt(current.targetReps, mode);
-			if (amrapReps === null) return;
-			reps = amrapReps;
-		} else if (mode === 'fail') {
-			reps = Math.max(0, current.targetReps - 1);
+		let reps = c.targetReps;
+		if (c.setItem.isAmrap || mode === 'fail') {
+			const raw = await openPrompt({
+				title: mode === 'fail' ? 'Reps completed' : 'Total reps',
+				hint: mode === 'fail' ? `Target was ${c.targetReps}` : `At least ${c.targetReps}`,
+				inputType: 'number',
+				initial: String(mode === 'fail' ? Math.max(0, c.targetReps - 1) : c.targetReps),
+				validate: (v) => validateReps(v, c.targetReps, mode, c.setItem.isAmrap)
+			});
+			if (raw === null) return;
+			reps = Number(raw);
 		}
 
 		const durationSeconds = Math.max(0, timerSeconds);
 		await runAction(() =>
-			completeSet({
-				sessionSetId: current.setItem.id,
-				repsCompleted: reps,
-				weightKg: current.weightKg,
-				durationSeconds
-			})
+			completeSet({ sessionSetId: c.setItem.id, repsCompleted: reps, weightKg: c.weightKg, durationSeconds })
 		);
 
-		// When the last set is logged we stop here (rather than auto-finishing) so a mistaken
-		// final set can still be undone before progression is applied.
-		if (activeSession && !currentPendingSet()) {
+		// After the last set we stop here (no auto-finish) so a mistaken set can still be undone.
+		if (activeSession && !current()) {
 			stopSetTimer();
 			return;
 		}
 		if (activeSession) restartSetTimer();
 	}
 
+	async function onChangeWeight() {
+		const c = current();
+		if (!c) return;
+		const raw = await openPrompt({
+			title: `Weight for ${c.entry.exerciseName} (${unitLabel()})`,
+			hint: 'Applies to the remaining sets of this exercise',
+			inputType: 'number',
+			initial: displayWeightFromKg(c.weightKg, weightUnit),
+			validate: validateWeight
+		});
+		if (raw === null) return;
+		weightOverrides = { ...weightOverrides, [c.entry.id]: convertUnitToKg(Number(raw), weightUnit) };
+	}
+
 	async function onUndoLastSet() {
-		const last = lastCompletedSet();
+		const last = lastCompletedSet(activeSession);
 		if (!last) return;
 		await runAction(() => uncompleteSet(last.id), 'Set undone');
 		if (activeSession && !timerHandle) restartSetTimer();
+	}
+
+	// ------------------------------------------------------------ exercise changes
+
+	async function onSkip(entryId: number) {
+		await runAction(() => skipExercise(entryId), 'Exercise skipped');
+	}
+
+	async function onUnskip(entryId: number) {
+		await runAction(() => unskipExercise(entryId));
+		if (activeSession && !timerHandle) restartSetTimer();
+	}
+
+	async function onAddSet(entryId: number) {
+		await runAction(() => addSet(entryId), 'Set added');
+		if (activeSession && !timerHandle) restartSetTimer();
+	}
+
+	async function onSwap(entryId: number, currentName: string) {
+		const name = await openPrompt({
+			title: `Swap ${currentName} for…`,
+			hint: "Swapped exercises are logged but don't change the plan's progression",
+			inputType: 'text',
+			initial: '',
+			validate: (v) => (v ? null : 'Enter an exercise name')
+		});
+		if (name === null) return;
+		const { [entryId]: _dropped, ...rest } = weightOverrides;
+		weightOverrides = rest;
+		await runAction(() => swapExercise(entryId, name), `Swapped to ${name}`);
+	}
+
+	async function onAddExercise(event: SubmitEvent) {
+		event.preventDefault();
+		const session = activeSession;
+		if (!session) return;
+		const sets = Number(addSets);
+		const reps = Number(addReps);
+		const weight = Number(addWeight);
+		if (!addName.trim()) return pushToast('Enter an exercise name', 'error');
+		if (!Number.isInteger(sets) || sets < 1 || !Number.isInteger(reps) || reps < 1 || !(weight >= 0)) {
+			return pushToast('Use whole numbers for sets/reps and a weight of 0 or more', 'error');
+		}
+		const added = await runAction(
+			() =>
+				addExerciseToWorkout({
+					sessionId: session.id,
+					exerciseName: addName.trim(),
+					sets,
+					reps,
+					weightKg: convertUnitToKg(weight, weightUnit)
+				}),
+			`Added ${addName.trim()}`
+		);
+		if (added) {
+			addName = '';
+			if (!timerHandle) restartSetTimer();
+		}
+	}
+
+	async function openExercises() {
+		exercisesOpen = true;
+		if (exerciseNames.length === 0) {
+			exerciseNames = await fetchExerciseNames().catch(() => []);
+		}
+	}
+
+	// ------------------------------------------------------------ start / finish
+
+	async function onStartWorkout() {
+		weightOverrides = {};
+		await runAction(() => startWorkout(), 'Workout started');
+		if (activeSession) restartSetTimer();
+	}
+
+	async function onStartEmptyWorkout() {
+		const name = await openPrompt({
+			title: 'Name this workout',
+			hint: "Empty workouts aren't part of your plan; add exercises as you go",
+			inputType: 'text',
+			initial: 'Workout',
+			validate: (v) => (v ? null : 'Enter a name')
+		});
+		if (name === null) return;
+		weightOverrides = {};
+		await runAction(() => startEmptyWorkout(name), 'Workout started');
+		if (activeSession) {
+			restartSetTimer();
+			await openExercises();
+		}
 	}
 
 	async function onFinishWorkout(message: string) {
@@ -348,28 +423,23 @@
 		stopSetTimer();
 	}
 
-	async function onStartWorkout() {
-		await runAction(() => startWorkout(), 'Workout started');
-		if (activeSession) restartSetTimer();
-	}
+	// ------------------------------------------------------------ display helpers
 
 	function currentSetExerciseName(): string {
-		const current = currentPendingSet();
-		if (!current) return 'All sets complete';
-		return current.entry.exerciseName;
+		const c = current();
+		if (!c) return 'All sets complete';
+		return c.entry.exerciseName;
 	}
 
 	function currentSetTargetLine(): string {
-		const current = currentPendingSet();
-		if (!current) return '';
-		const repTarget = `${current.targetReps}${current.setItem.isAmrap ? '+' : ''}`;
-		return `${repTarget} Reps @ ${displayWeightFromKg(current.weightKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
+		const c = current();
+		if (!c) return '';
+		const repTarget = `${c.targetReps}${c.setItem.isAmrap ? '+' : ''}`;
+		return `Set ${c.setItem.setIndex}/${c.entry.sets.length} · ${repTarget} reps @ ${displayWeightFromKg(c.weightKg, weightUnit)} ${unitLabel()}`;
 	}
 
 	function currentExpectedRestSeconds(): number {
-		const current = currentPendingSet();
-		if (!current) return 90;
-		return current.entry.expectedRestSeconds ?? 90;
+		return current()?.entry.expectedRestSeconds ?? 90;
 	}
 
 	function currentRestState(): 'ok' | 'warn' | 'over' {
@@ -379,10 +449,8 @@
 		return 'ok';
 	}
 
-	function formatRestTargetLabel(seconds: number): string {
-		const mins = Math.floor(seconds / 60);
-		const secs = seconds % 60;
-		return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+	function statusLabel(status: ReturnType<typeof entryStatus>): string {
+		return { done: 'Done', skipped: 'Skipped', 'in-progress': 'In progress', todo: 'To do' }[status];
 	}
 
 	onMount(() => {
@@ -406,10 +474,8 @@
 
 		return () => {
 			stopSetTimer();
-			if (amrapPromptResolver) {
-				amrapPromptResolver(null);
-				amrapPromptResolver = null;
-			}
+			promptResolver?.(null);
+			promptResolver = null;
 			if (typeof document !== 'undefined') {
 				document.body.classList.remove('session-active-workout');
 			}
@@ -420,12 +486,18 @@
 
 {#if activeSession}
 	<section class="card session-overlay">
-		<button class="exit-btn" onclick={() => (exitMenuOpen = true)} disabled={loading}>Exit</button>
-		{#if lastCompletedSet()}
-			<button class="undo-btn" onclick={onUndoLastSet} disabled={loading} title="Undo the last logged set">
-				↶ Undo set
-			</button>
-		{/if}
+		<div class="session-toolbar">
+			{#if lastCompletedSet(activeSession)}
+				<button onclick={onUndoLastSet} disabled={loading} title="Undo the last logged set">↶ Undo set</button>
+			{:else}
+				<span></span>
+			{/if}
+			<span class="session-name">{activeSession.planWorkoutName}</span>
+			<div class="toolbar-right">
+				<button onclick={openExercises} disabled={loading}>Exercises</button>
+				<button onclick={() => (exitMenuOpen = true)} disabled={loading}>Exit</button>
+			</div>
+		</div>
 		<div class="timer-panel">
 			<div
 				class="segment-clock"
@@ -454,15 +526,18 @@
 			</div>
 		</div>
 		<p class="rest-target" class:warn={currentRestState() === 'warn'} class:over={currentRestState() === 'over'}>
-			Rest target {formatRestTargetLabel(currentExpectedRestSeconds())}
+			Rest target {formatTimer(currentExpectedRestSeconds())}
 		</p>
 		<p class="set-description">
 			<span class="set-exercise">{currentSetExerciseName()}</span>
 			{#if currentSetTargetLine()}
 				<span class="set-target">{currentSetTargetLine()}</span>
-			{/if}
-			{#if currentIsBarbell()}
-				<span class="plate-line">{formatPlates(displayWeight(currentPendingSet()?.weightKg ?? 0), weightUnit)}</span>
+				<span class="set-tools">
+					<button type="button" class="link" onclick={onChangeWeight} disabled={loading}>Change weight</button>
+					{#if currentIsBarbell()}
+						<span class="plate-line">{formatPlates(displayWeight(current()?.weightKg ?? 0), weightUnit)}</span>
+					{/if}
+				</span>
 			{/if}
 		</p>
 		{#if currentWarmups().length > 0}
@@ -471,28 +546,28 @@
 				<ul>
 					{#each currentWarmups() as warmup}
 						<li>
-							<strong>{warmup.weight} {weightUnitLabel(weightUnit)} × {warmup.reps}</strong>
+							<strong>{warmup.weight} {unitLabel()} × {warmup.reps}</strong>
 							<span class="subtle">{formatPlates(warmup.weight, weightUnit)}</span>
 						</li>
 					{/each}
 				</ul>
 			</div>
 		{/if}
-		{#if !currentPendingSet()}
+		{#if !current()}
 			<div class="complete-actions">
 				<button type="button" class="primary finish-btn" onclick={() => onFinishWorkout('Workout finished')} disabled={loading}>
 					Finish workout
 				</button>
-				<p class="subtle">Logged a set wrong? Use Undo before finishing.</p>
+				<p class="subtle">Logged a set wrong? Undo it before finishing. Need more? Use Exercises.</p>
 			</div>
 		{/if}
-		<div class="session-actions" class:hidden={!currentPendingSet()}>
+		<div class="session-actions" class:hidden={!current()}>
 			<div class="action-ring success-ring">
 				<button
 					type="button"
 					class="action-btn success-btn"
 					onclick={() => submitCurrentSet('success')}
-					disabled={loading || !currentPendingSet()}
+					disabled={loading || !current()}
 					aria-label="Mark set successful"
 				>
 					✓
@@ -503,7 +578,7 @@
 					type="button"
 					class="action-btn fail-btn"
 					onclick={() => submitCurrentSet('fail')}
-					disabled={loading || !currentPendingSet()}
+					disabled={loading || !current()}
 					aria-label="Mark set failed"
 				>
 					✕
@@ -511,46 +586,100 @@
 			</div>
 		</div>
 
+		{#if exercisesOpen}
+			<div class="modal-backdrop" role="presentation">
+				<div class="modal exercises-modal" role="dialog" aria-modal="true" aria-label="Exercises">
+					<div class="modal-head">
+						<span class="modal-title">Exercises</span>
+						<button type="button" onclick={() => (exercisesOpen = false)}>Close</button>
+					</div>
+					<ul class="entry-list">
+						{#each activeSession.entries as entry (entry.id)}
+							{@const status = entryStatus(entry)}
+							<li class={`entry-row ${status}`}>
+								<div class="entry-info">
+									<strong>{entry.exerciseName}</strong>
+									<span class="subtle">
+										{entry.sets.filter((s) => s.completed).length}/{entry.sets.length} sets · {statusLabel(status)}
+										{#if entry.planWorkoutExerciseId === null} · added{/if}
+									</span>
+								</div>
+								<div class="entry-actions">
+									{#if status === 'skipped'}
+										<button type="button" onclick={() => onUnskip(entry.id)} disabled={loading}>Unskip</button>
+									{:else if status !== 'done'}
+										<button type="button" onclick={() => onSkip(entry.id)} disabled={loading}>Skip</button>
+									{/if}
+									<button type="button" onclick={() => onSwap(entry.id, entry.exerciseName)} disabled={loading}>Swap</button>
+									<button type="button" onclick={() => onAddSet(entry.id)} disabled={loading}>+ Set</button>
+								</div>
+							</li>
+						{/each}
+					</ul>
+					<form class="add-exercise" onsubmit={onAddExercise}>
+						<span class="modal-subtitle">Add exercise</span>
+						<input placeholder="Exercise name" list="exercise-names" bind:value={addName} disabled={loading} />
+						<datalist id="exercise-names">
+							{#each exerciseNames as name}
+								<option value={name}></option>
+							{/each}
+						</datalist>
+						<div class="add-grid">
+							<label>Sets <input type="number" min="1" step="1" bind:value={addSets} /></label>
+							<label>Reps <input type="number" min="1" step="1" bind:value={addReps} /></label>
+							<label>Weight ({unitLabel()}) <input type="number" min="0" step="any" bind:value={addWeight} /></label>
+						</div>
+						<button type="submit" class="primary" disabled={loading}>Add</button>
+					</form>
+				</div>
+			</div>
+		{/if}
+
 		{#if exitMenuOpen}
-			<div class="amrap-backdrop" role="presentation">
-				<div class="amrap-modal" role="dialog" aria-modal="true" aria-label="Exit workout">
-					<span class="amrap-label">Exit workout</span>
+			<div class="modal-backdrop" role="presentation">
+				<div class="modal" role="dialog" aria-modal="true" aria-label="Exit workout">
+					<span class="modal-title">Exit workout</span>
 					<button type="button" class="primary" onclick={() => onFinishWorkout('Workout ended early')} disabled={loading}>
 						Finish now (save &amp; progress)
 					</button>
-					<button type="button" class="danger" onclick={onDiscardWorkout} disabled={loading}>
-						Discard workout
-					</button>
+					<button type="button" class="danger" onclick={onDiscardWorkout} disabled={loading}>Discard workout</button>
 					<button type="button" onclick={() => (exitMenuOpen = false)} disabled={loading}>Keep going</button>
 				</div>
 			</div>
 		{/if}
 
-		{#if amrapPromptOpen}
-			<div class="amrap-backdrop" role="presentation">
-				<div class="amrap-modal" role="dialog" aria-modal="true" aria-label="Enter total reps">
+		{#if prompt}
+			<div class="modal-backdrop prompt-backdrop" role="presentation">
+				<div class="modal" role="dialog" aria-modal="true" aria-label={prompt.title}>
 					<label>
-						<span class="amrap-label">Total reps</span>
+						<span class="modal-title">{prompt.title}</span>
+						{#if prompt.hint}<span class="subtle">{prompt.hint}</span>{/if}
+						<!-- svelte-ignore a11y_autofocus -->
 						<input
-							type="number"
-							min="0"
-							step="1"
-							bind:value={amrapPromptInput}
+							type={prompt.inputType}
+							min={prompt.inputType === 'number' ? 0 : undefined}
+							step={prompt.inputType === 'number' ? 'any' : undefined}
+							list={prompt.inputType === 'text' ? 'exercise-names-prompt' : undefined}
+							autofocus
+							bind:value={promptValue}
 							disabled={loading}
 							onkeydown={(e) => {
-								if (e.key === 'Enter') submitAmrapPrompt();
-								if (e.key === 'Escape') closeAmrapPrompt(null);
+								if (e.key === 'Enter') submitPrompt();
+								if (e.key === 'Escape') closePrompt(null);
 							}}
 						/>
+						<datalist id="exercise-names-prompt">
+							{#each exerciseNames as name}
+								<option value={name}></option>
+							{/each}
+						</datalist>
 					</label>
-					{#if amrapPromptError}
-						<p class="banner error amrap-error">{amrapPromptError}</p>
+					{#if promptError}
+						<p class="banner error modal-error">{promptError}</p>
 					{/if}
-					<div class="amrap-actions">
-						<button type="button" onclick={() => closeAmrapPrompt(null)} disabled={loading}>Cancel</button>
-						<button type="button" class="primary" onclick={submitAmrapPrompt} disabled={loading}>
-							Save
-						</button>
+					<div class="modal-actions">
+						<button type="button" onclick={() => closePrompt(null)} disabled={loading}>Cancel</button>
+						<button type="button" class="primary" onclick={submitPrompt} disabled={loading}>Save</button>
 					</div>
 				</div>
 			</div>
@@ -578,7 +707,7 @@
 									<strong>{row.name}</strong>
 									<span class="subtle">
 										{row.sets}×{row.reps} @ {displayWeightFromKg(row.weightKg, weightUnit)}
-										{weightUnitLabel(weightUnit)}
+										{unitLabel()}
 										{#if row.tier} · {row.tier}{/if}
 									</span>
 								</li>
@@ -608,6 +737,9 @@
 			</div>
 			<a class="link-btn" href="/plan">Manage Plans</a>
 		{/if}
+		<button type="button" class="empty-workout-btn" onclick={onStartEmptyWorkout} disabled={loading}>
+			Start empty workout
+		</button>
 	</section>
 
 	{#if dashboard?.status && dashboard.status.needsNew1rmExercises.length > 0}
@@ -618,6 +750,34 @@
 			</p>
 			<p class="subtle">Go to Settings to update 1RM values.</p>
 		</section>
+	{/if}
+
+	{#if prompt}
+		<div class="modal-backdrop fixed" role="presentation">
+			<div class="modal" role="dialog" aria-modal="true" aria-label={prompt.title}>
+				<label>
+					<span class="modal-title">{prompt.title}</span>
+					{#if prompt.hint}<span class="subtle">{prompt.hint}</span>{/if}
+					<!-- svelte-ignore a11y_autofocus -->
+					<input
+						type={prompt.inputType}
+						autofocus
+						bind:value={promptValue}
+						onkeydown={(e) => {
+							if (e.key === 'Enter') submitPrompt();
+							if (e.key === 'Escape') closePrompt(null);
+						}}
+					/>
+				</label>
+				{#if promptError}
+					<p class="banner error modal-error">{promptError}</p>
+				{/if}
+				<div class="modal-actions">
+					<button type="button" onclick={() => closePrompt(null)}>Cancel</button>
+					<button type="button" class="primary" onclick={submitPrompt}>Start</button>
+				</div>
+			</div>
+		</div>
 	{/if}
 {/if}
 
@@ -636,21 +796,7 @@
 		text-align: center;
 	}
 
-	.exit-btn {
-		position: absolute;
-		top: 0.9rem;
-		right: 0.9rem;
-		padding: 0.35rem 0.6rem;
-		font-size: 0.85rem;
-	}
 
-	.undo-btn {
-		position: absolute;
-		top: 0.9rem;
-		left: 0.9rem;
-		padding: 0.35rem 0.6rem;
-		font-size: 0.85rem;
-	}
 
 	.plate-line {
 		font-size: 0.95rem;
@@ -699,6 +845,147 @@
 
 	.session-actions.hidden {
 		display: none;
+	}
+
+	.session-overlay {
+		padding-top: 3.4rem;
+		box-sizing: border-box;
+		overflow-x: hidden;
+		overflow-y: auto;
+	}
+
+	.session-toolbar {
+		position: absolute;
+		top: 0.75rem;
+		left: 0.75rem;
+		right: 0.75rem;
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.session-toolbar button {
+		padding: 0.35rem 0.6rem;
+		font-size: 0.85rem;
+	}
+
+	.toolbar-right {
+		display: flex;
+		gap: 0.4rem;
+	}
+
+	.session-name {
+		font-size: 0.85rem;
+		color: #94a3b8;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+
+	.set-tools {
+		display: flex;
+		justify-content: center;
+		align-items: center;
+		gap: 0.8rem;
+		flex-wrap: wrap;
+	}
+
+	button.link {
+		background: none;
+		border: none;
+		padding: 0;
+		color: #60a5fa;
+		text-decoration: underline;
+		font-size: 0.95rem;
+	}
+
+	.modal-backdrop.fixed {
+		position: fixed;
+	}
+
+	.prompt-backdrop {
+		z-index: 30;
+	}
+
+	.modal label {
+		display: grid;
+		gap: 0.4rem;
+	}
+
+	.modal-head {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.exercises-modal {
+		width: min(100%, 520px);
+		max-height: 90%;
+		overflow-y: auto;
+	}
+
+	.modal-subtitle {
+		font-weight: 700;
+	}
+
+	.entry-list {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: 0.5rem;
+	}
+
+	.entry-row {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+		border: 1px solid #1f2937;
+		border-radius: 10px;
+		padding: 0.5rem 0.6rem;
+	}
+
+	.entry-row.done {
+		border-color: #166534;
+	}
+
+	.entry-row.skipped {
+		opacity: 0.6;
+	}
+
+	.entry-info {
+		display: grid;
+		gap: 0.1rem;
+	}
+
+	.entry-actions {
+		display: flex;
+		gap: 0.35rem;
+	}
+
+	.entry-actions button {
+		padding: 0.3rem 0.55rem;
+		font-size: 0.85rem;
+	}
+
+	.add-exercise {
+		display: grid;
+		gap: 0.5rem;
+		border-top: 1px solid #1f2937;
+		padding-top: 0.7rem;
+	}
+
+	.add-grid {
+		display: grid;
+		grid-template-columns: repeat(3, 1fr);
+		gap: 0.5rem;
+	}
+
+	.empty-workout-btn {
+		justify-self: start;
 	}
 
 	.timer-panel {
@@ -899,7 +1186,7 @@
 		border-color: #b91c1c;
 	}
 
-	.amrap-backdrop {
+	.modal-backdrop {
 		position: absolute;
 		inset: 0;
 		background: rgba(2, 6, 23, 0.72);
@@ -909,7 +1196,7 @@
 		z-index: 20;
 	}
 
-	.amrap-modal {
+	.modal {
 		width: min(100%, 320px);
 		background: #111827;
 		border: 1px solid #334155;
@@ -920,23 +1207,23 @@
 		text-align: left;
 	}
 
-	.amrap-modal label {
+	.modal label {
 		display: grid;
 		gap: 0.55rem;
 	}
 
-	.amrap-label {
+	.modal-title {
 		font-size: 1.2rem;
 		font-weight: 700;
 	}
 
-	.amrap-actions {
+	.modal-actions {
 		display: flex;
 		justify-content: flex-end;
 		gap: 0.55rem;
 	}
 
-	.amrap-error {
+	.modal-error {
 		margin: 0;
 	}
 
@@ -1025,6 +1312,16 @@
 	}
 
 	@media (max-width: 760px) {
+		.session-toolbar {
+			top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+		}
+
+		/* Let the clock shrink so the set details and buttons stay on screen. */
+		.timer-panel {
+			min-height: 0;
+			padding: 0.4rem 0;
+		}
+
 		.session-overlay {
 			position: fixed;
 			inset: 0;
@@ -1035,22 +1332,14 @@
 			max-width: none;
 			margin: 0;
 			padding:
-				calc(env(safe-area-inset-top, 0px) + 0.75rem)
+				calc(env(safe-area-inset-top, 0px) + 3.2rem)
 				0.85rem
 				calc(env(safe-area-inset-bottom, 0px) + 1rem);
 			border-radius: 0;
 			border: none;
 		}
 
-		.exit-btn {
-			top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
-			right: 0.85rem;
-		}
 
-		.undo-btn {
-			top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
-			left: 0.85rem;
-		}
 
 		.hero-identifiers {
 			text-align: left;

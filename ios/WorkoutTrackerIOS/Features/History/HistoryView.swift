@@ -32,6 +32,16 @@ final class HistoryViewModel: ObservableObject {
         loading = false
     }
 
+    func delete(item: WorkoutHistoryItem, api: WorkoutAPI) async {
+        errorMessage = ""
+        do {
+            infoMessage = try await api.deleteWorkout(sessionId: item.sessionId).message
+            await load(using: api)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
     func sendToStrava(item: WorkoutHistoryItem, api: WorkoutAPI) async {
         loading = true
         errorMessage = ""
@@ -55,6 +65,8 @@ struct HistoryView: View {
     @EnvironmentObject private var settings: AppSettings
     @EnvironmentObject private var store: OfflineWorkoutStore
     @StateObject private var model = HistoryViewModel()
+    @State private var editingSessionId: Int?
+    @State private var deleting: WorkoutHistoryItem?
 
     private var api: WorkoutAPI { settings.api }
 
@@ -129,15 +141,174 @@ struct HistoryView: View {
                                     .foregroundStyle(.secondary)
                             }
                         }
+
+                        HStack {
+                            Button("Edit") { editingSessionId = item.sessionId }
+                            Spacer()
+                            Button("Delete", role: .destructive) { deleting = item }
+                        }
+                        .buttonStyle(.borderless)
                     }
                 }
             }
             .navigationTitle("History")
             .task { await model.load(using: api) }
             .refreshable { await model.load(using: api) }
+            .sheet(item: Binding(
+                get: { editingSessionId.map(EditTarget.init) },
+                set: { editingSessionId = $0?.id }
+            )) { target in
+                EditWorkoutSheet(sessionId: target.id, unit: settings.weightUnit, api: api) { message in
+                    editingSessionId = nil
+                    model.infoMessage = message
+                    Task { await model.load(using: api) }
+                }
+            }
+            .confirmationDialog(
+                "Delete this workout?",
+                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
+                titleVisibility: .visible,
+                presenting: deleting
+            ) { item in
+                Button("Delete \(item.planWorkoutName)", role: .destructive) {
+                    Task { await model.delete(item: item, api: api) }
+                }
+            } message: { _ in
+                Text("If it's your most recent workout, its progression is undone too. This can't be undone.")
+            }
             .onChange(of: store.outbox.count) { _ in
                 Task { await model.load(using: api) }
             }
         }
+    }
+}
+
+private struct EditTarget: Identifiable {
+    let id: Int
+}
+
+/// Correct reps/weights of a finished workout. The latest workout's progression is recalculated.
+private struct EditWorkoutSheet: View {
+    struct Row: Identifiable {
+        let id: Int
+        let exerciseName: String
+        let setIndex: Int
+        var completed: Bool
+        var reps: String
+        var weight: String
+        let originalWeight: String
+        let originalWeightKg: Double?
+    }
+
+    let sessionId: Int
+    let unit: WeightUnit
+    let api: WorkoutAPI
+    let onSaved: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var rows: [Row] = []
+    @State private var loading = true
+    @State private var errorMessage = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if loading { ProgressView() }
+                if !errorMessage.isEmpty {
+                    Text(errorMessage).foregroundStyle(.red)
+                }
+                ForEach(groupedNames, id: \.self) { name in
+                    Section(name) {
+                        ForEach($rows.filter { $0.wrappedValue.exerciseName == name }) { $row in
+                            HStack {
+                                Toggle("Set \(row.setIndex)", isOn: $row.completed)
+                                    .fixedSize()
+                                TextField("Reps", text: $row.reps)
+                                    .keyboardType(.numberPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .disabled(!row.completed)
+                                    .frame(width: 50)
+                                Text("×")
+                                TextField(unit.label, text: $row.weight)
+                                    .keyboardType(.decimalPad)
+                                    .multilineTextAlignment(.trailing)
+                                    .frame(width: 70)
+                                Text(unit.label).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+            .navigationTitle("Edit workout")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { Task { await save() } }.disabled(loading)
+                }
+            }
+            .task { await load() }
+        }
+    }
+
+    private var groupedNames: [String] {
+        var seen: [String] = []
+        for row in rows where !seen.contains(row.exerciseName) { seen.append(row.exerciseName) }
+        return seen
+    }
+
+    private func load() async {
+        loading = true
+        do {
+            guard let session = try await api.fetchWorkoutSession(id: sessionId) else { throw URLError(.fileDoesNotExist) }
+            rows = session.entries.flatMap { entry in
+                entry.sets.map { set in
+                    let weight = WeightMath.displayWeightFromKg(set.weightKg ?? entry.plannedWeightKg, unit: unit)
+                    return Row(
+                        id: set.id,
+                        exerciseName: entry.exerciseName,
+                        setIndex: set.setIndex,
+                        completed: set.completed,
+                        reps: set.repsCompleted.map(String.init) ?? "",
+                        weight: weight,
+                        originalWeight: weight,
+                        originalWeightKg: set.weightKg
+                    )
+                }
+            }
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        loading = false
+    }
+
+    private func save() async {
+        var sets: [[String: Any]] = []
+        for row in rows {
+            var edit: [String: Any] = ["sessionSetId": row.id, "completed": row.completed]
+            if row.completed {
+                guard let reps = Int(row.reps), reps >= 0 else {
+                    errorMessage = "\(row.exerciseName) set \(row.setIndex): enter reps or switch it off"
+                    return
+                }
+                edit["repsCompleted"] = reps
+            }
+            if row.weight != row.originalWeight {
+                guard let weight = Double(row.weight.replacingOccurrences(of: ",", with: ".")), weight >= 0 else {
+                    errorMessage = "\(row.exerciseName) set \(row.setIndex): weight must be 0 or more"
+                    return
+                }
+                edit["weightKg"] = WeightMath.convertUnitToKg(weight, unit: unit)
+            } else if let kg = row.originalWeightKg {
+                edit["weightKg"] = kg
+            }
+            sets.append(edit)
+        }
+        loading = true
+        do {
+            let result = try await api.updateWorkout(sessionId: sessionId, sets: sets)
+            onSaved(result.message)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        loading = false
     }
 }

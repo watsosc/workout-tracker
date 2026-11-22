@@ -304,8 +304,11 @@ class WorkoutSession(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
-    plan_run_id: Mapped[int] = mapped_column(ForeignKey("plan_runs.id"), index=True)
-    plan_workout_id: Mapped[int] = mapped_column(ForeignKey("plan_workouts.id"), index=True)
+    # Both null for ad-hoc ("empty") workouts that aren't part of a plan.
+    plan_run_id: Mapped[int | None] = mapped_column(ForeignKey("plan_runs.id"), nullable=True, index=True)
+    plan_workout_id: Mapped[int | None] = mapped_column(ForeignKey("plan_workouts.id"), nullable=True, index=True)
+    # Display name for ad-hoc workouts (plan workouts use the plan day's name).
+    name: Mapped[str | None] = mapped_column(String(120), nullable=True)
     status: Mapped[WorkoutSessionStatus] = mapped_column(
         Enum(WorkoutSessionStatus), default=WorkoutSessionStatus.IN_PROGRESS
     )
@@ -314,6 +317,9 @@ class WorkoutSession(Base):
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     # Idempotency key for workouts uploaded by offline-capable clients (see logWorkout).
     client_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
+    # Progression state captured just before this workout was applied, so editing or deleting the
+    # most recent workout can undo its effect and re-apply it.
+    progression_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class SessionExerciseEntry(Base):
@@ -321,8 +327,10 @@ class SessionExerciseEntry(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[int] = mapped_column(ForeignKey("workout_sessions.id"), index=True)
-    plan_workout_exercise_id: Mapped[int] = mapped_column(
-        ForeignKey("plan_workout_exercises.id"), index=True
+    # Null for exercises added mid-workout. If the exercise was swapped, this still points at the
+    # plan exercise it replaced, but exercise_id differs (and progression is not applied).
+    plan_workout_exercise_id: Mapped[int | None] = mapped_column(
+        ForeignKey("plan_workout_exercises.id"), nullable=True, index=True
     )
     exercise_id: Mapped[int] = mapped_column(ForeignKey("exercises.id"), index=True)
     planned_sets: Mapped[int] = mapped_column(Integer)
@@ -341,6 +349,8 @@ class SessionSet(Base):
     set_index: Mapped[int] = mapped_column(Integer)
     target_reps: Mapped[int | None] = mapped_column(Integer, nullable=True)
     is_amrap: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Set aside by "skip exercise"; never completed.
+    skipped: Mapped[bool] = mapped_column(Boolean, default=False)
     reps_completed: Mapped[int | None] = mapped_column(Integer, nullable=True)
     weight_kg: Mapped[float | None] = mapped_column(Float, nullable=True)
     duration_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)

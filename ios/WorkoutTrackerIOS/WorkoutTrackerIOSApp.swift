@@ -29,6 +29,13 @@ struct WorkoutTrackerIOSApp: App {
                         .interactiveDismissDisabled()
                 }
                 .task { await settings.checkAuthStatus() }
+                // Mirror the workout onto the lock screen / Dynamic Island from any tab.
+                .onReceive(workoutStore.$activeWorkout) { workout in
+                    LiveActivityController.shared.sync(workout: workout, unit: settings.weightUnit)
+                }
+                .onChange(of: settings.weightUnit) { unit in
+                    LiveActivityController.shared.sync(workout: workoutStore.activeWorkout, unit: unit)
+                }
         }
         .onChange(of: scenePhase) { phase in
             switch phase {

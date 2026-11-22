@@ -79,6 +79,7 @@ export type SessionSet = {
 	durationSeconds: number | null;
 	completed: boolean;
 	completedAt: string | null;
+	skipped: boolean;
 };
 
 export type EquipmentType =
@@ -101,6 +102,8 @@ export type PersonalRecord = {
 
 export type SessionEntry = {
 	id: number;
+	/** Null for exercises added during the workout. */
+	planWorkoutExerciseId: number | null;
 	exerciseId: number;
 	equipmentType: EquipmentType | null;
 	exerciseName: string;
@@ -115,6 +118,9 @@ export type SessionEntry = {
 
 export type WorkoutSession = {
 	id: number;
+	/** Null for ad-hoc (empty) workouts. */
+	planWorkoutId: number | null;
+	planWorkoutName: string;
 	status: 'IN_PROGRESS' | 'COMPLETED' | 'CANCELLED';
 	startedAt: string;
 	finishedAt: string | null;
@@ -141,7 +147,7 @@ export type WorkoutExportStatus = 'PENDING' | 'SENT' | 'FAILED';
 
 export type WorkoutHistoryItem = {
 	sessionId: number;
-	planRunId: number;
+	planRunId: number | null;
 	finishedAt: string | null;
 	planWorkoutName: string;
 	workoutSequenceIndex: number | null;

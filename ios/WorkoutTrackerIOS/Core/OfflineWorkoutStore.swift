@@ -6,6 +6,9 @@ import UIKit
 
 // MARK: - On-device workout model
 
+// Fields added after the first release decode with defaults (decodeIfPresent), so a workout saved
+// by an older build survives an app update.
+
 struct LocalSet: Codable, Identifiable, Hashable {
     var setIndex: Int
     var targetReps: Int?
@@ -14,14 +17,44 @@ struct LocalSet: Codable, Identifiable, Hashable {
     var repsCompleted: Int?
     var durationSeconds: Int?
     var completedAt: Date?
+    /// Set aside by "skip exercise".
+    var skipped = false
 
     var id: Int { setIndex }
     var completed: Bool { completedAt != nil }
+    var isOpen: Bool { !completed && !skipped }
+
+    init(setIndex: Int, targetReps: Int?, isAmrap: Bool, weightKg: Double, repsCompleted: Int? = nil,
+         durationSeconds: Int? = nil, completedAt: Date? = nil, skipped: Bool = false) {
+        self.setIndex = setIndex
+        self.targetReps = targetReps
+        self.isAmrap = isAmrap
+        self.weightKg = weightKg
+        self.repsCompleted = repsCompleted
+        self.durationSeconds = durationSeconds
+        self.completedAt = completedAt
+        self.skipped = skipped
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        setIndex = try c.decode(Int.self, forKey: .setIndex)
+        targetReps = try c.decodeIfPresent(Int.self, forKey: .targetReps)
+        isAmrap = try c.decode(Bool.self, forKey: .isAmrap)
+        weightKg = try c.decode(Double.self, forKey: .weightKg)
+        repsCompleted = try c.decodeIfPresent(Int.self, forKey: .repsCompleted)
+        durationSeconds = try c.decodeIfPresent(Int.self, forKey: .durationSeconds)
+        completedAt = try c.decodeIfPresent(Date.self, forKey: .completedAt)
+        skipped = try c.decodeIfPresent(Bool.self, forKey: .skipped) ?? false
+    }
 }
 
 struct LocalEntry: Codable, Identifiable, Hashable {
-    var planWorkoutExerciseId: Int
-    var exerciseId: Int
+    var localId = UUID()
+    /// Nil for exercises added during the workout. If `exerciseName` was changed (swapped), this
+    /// still points at the plan exercise it replaced.
+    var planWorkoutExerciseId: Int?
+    var exerciseId: Int?
     var exerciseName: String
     var plannedSets: Int
     var plannedReps: Int
@@ -32,7 +65,42 @@ struct LocalEntry: Codable, Identifiable, Hashable {
     var expectedRestSeconds: Int
     var sets: [LocalSet]
 
-    var id: Int { planWorkoutExerciseId }
+    var id: UUID { localId }
+    var isAdded: Bool { planWorkoutExerciseId == nil }
+    var isSkipped: Bool { sets.contains(where: \.skipped) && !sets.contains(where: \.isOpen) }
+    var isDone: Bool { !sets.contains(where: { !$0.completed }) }
+
+    init(planWorkoutExerciseId: Int?, exerciseId: Int?, exerciseName: String, plannedSets: Int, plannedReps: Int,
+         plannedWeightKg: Double, progressionProtocol: ProtocolType, tier: String?, equipmentType: String?,
+         expectedRestSeconds: Int, sets: [LocalSet]) {
+        self.planWorkoutExerciseId = planWorkoutExerciseId
+        self.exerciseId = exerciseId
+        self.exerciseName = exerciseName
+        self.plannedSets = plannedSets
+        self.plannedReps = plannedReps
+        self.plannedWeightKg = plannedWeightKg
+        self.progressionProtocol = progressionProtocol
+        self.tier = tier
+        self.equipmentType = equipmentType
+        self.expectedRestSeconds = expectedRestSeconds
+        self.sets = sets
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        localId = try c.decodeIfPresent(UUID.self, forKey: .localId) ?? UUID()
+        planWorkoutExerciseId = try c.decodeIfPresent(Int.self, forKey: .planWorkoutExerciseId)
+        exerciseId = try c.decodeIfPresent(Int.self, forKey: .exerciseId)
+        exerciseName = try c.decode(String.self, forKey: .exerciseName)
+        plannedSets = try c.decode(Int.self, forKey: .plannedSets)
+        plannedReps = try c.decode(Int.self, forKey: .plannedReps)
+        plannedWeightKg = try c.decode(Double.self, forKey: .plannedWeightKg)
+        progressionProtocol = try c.decode(ProtocolType.self, forKey: .progressionProtocol)
+        tier = try c.decodeIfPresent(String.self, forKey: .tier)
+        equipmentType = try c.decodeIfPresent(String.self, forKey: .equipmentType)
+        expectedRestSeconds = try c.decode(Int.self, forKey: .expectedRestSeconds)
+        sets = try c.decode([LocalSet].self, forKey: .sets)
+    }
 
     /// Rest target, never shorter than the protocol's usual rest.
     var restTargetSeconds: Int {
@@ -56,7 +124,8 @@ struct LocalWorkout: Codable, Identifiable, Hashable {
     var clientId: String
     /// Set when this workout was started on the server (e.g. on web) and resumed on the phone.
     var serverSessionId: Int?
-    var planWorkoutId: Int
+    /// Nil for empty (ad-hoc) workouts that aren't part of the plan.
+    var planWorkoutId: Int?
     var planName: String
     var workoutName: String
     var startedAt: Date
@@ -74,7 +143,7 @@ struct LocalWorkout: Codable, Identifiable, Hashable {
 
     func pendingSetPosition() -> SetPosition? {
         for (e, entry) in entries.enumerated() {
-            if let s = entry.sets.firstIndex(where: { !$0.completed }) {
+            if let s = entry.sets.firstIndex(where: \.isOpen) {
                 return SetPosition(entryIndex: e, setIndex: s)
             }
         }
@@ -155,7 +224,8 @@ extension LocalWorkout {
                             weightKg: set.weightKg ?? e.plannedWeightKg,
                             repsCompleted: set.completed ? set.repsCompleted : nil,
                             durationSeconds: set.completed ? set.durationSeconds : nil,
-                            completedAt: set.completed ? (ISO8601.parse(set.completedAt) ?? Date()) : nil
+                            completedAt: set.completed ? (ISO8601.parse(set.completedAt) ?? Date()) : nil,
+                            skipped: set.skipped ?? false
                         )
                     }
                 )
@@ -168,12 +238,12 @@ extension LocalWorkout {
     func logWorkoutInput() -> [String: Any] {
         var input: [String: Any] = [
             "clientId": clientId,
-            "planWorkoutId": planWorkoutId,
+            "name": workoutName,
             "startedAt": ISO8601.string(startedAt),
             "finishedAt": ISO8601.string(finishedAt ?? Date()),
             "entries": entries.map { e -> [String: Any] in
-                [
-                    "planWorkoutExerciseId": e.planWorkoutExerciseId,
+                var entry: [String: Any] = [
+                    "exerciseName": e.exerciseName,
                     "plannedSets": e.plannedSets,
                     "plannedReps": e.plannedReps,
                     "plannedWeightKg": e.plannedWeightKg,
@@ -182,7 +252,8 @@ extension LocalWorkout {
                             "setIndex": s.setIndex,
                             "isAmrap": s.isAmrap,
                             "weightKg": s.weightKg,
-                            "completed": s.completed
+                            "completed": s.completed,
+                            "skipped": s.skipped && !s.completed
                         ]
                         if let v = s.targetReps { row["targetReps"] = v }
                         if let v = s.repsCompleted { row["repsCompleted"] = v }
@@ -191,12 +262,15 @@ extension LocalWorkout {
                         return row
                     }
                 ]
+                if let id = e.planWorkoutExerciseId { entry["planWorkoutExerciseId"] = id }
+                return entry
             },
             "heartRateSamples": heartRateSamples.map {
                 ["recordedAt": ISO8601.string($0.recordedAt), "bpm": $0.bpm, "source": "GARMIN_BLE"]
             }
         ]
         if let serverSessionId { input["sessionId"] = serverSessionId }
+        if let planWorkoutId { input["planWorkoutId"] = planWorkoutId }
         return input
     }
 }
@@ -258,6 +332,8 @@ private struct PersistedState: Codable {
     var prescriptionFetchedAt: Date?
     /// True when the server said there is no active plan (as opposed to "never fetched").
     var noActivePlan = false
+    /// Known exercise names, for suggestions when adding/swapping offline. Optional for old files.
+    var exerciseNames: [String]?
 }
 
 // MARK: - Store
@@ -272,6 +348,7 @@ final class OfflineWorkoutStore: ObservableObject {
     @Published private(set) var cachedPrescription: WorkoutPrescription?
     @Published private(set) var prescriptionFetchedAt: Date?
     @Published private(set) var noActivePlan = false
+    @Published private(set) var exerciseNames: [String] = []
     @Published private(set) var isOnline = true
     @Published private(set) var isSyncing = false
     @Published var lastUpload: UploadSummary?
@@ -337,6 +414,107 @@ final class OfflineWorkoutStore: ObservableObject {
         workout.entries[position.entryIndex].sets[position.setIndex].durationSeconds = max(0, Int(now.timeIntervalSince(restStart)))
         workout.entries[position.entryIndex].sets[position.setIndex].completedAt = now
         workout.lastSetCompletedAt = now
+        activeWorkout = workout
+        save()
+    }
+
+    func startEmptyWorkout(name: String) {
+        guard activeWorkout == nil else { return }
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        activeWorkout = LocalWorkout(
+            clientId: UUID().uuidString,
+            serverSessionId: nil,
+            planWorkoutId: nil,
+            planName: "",
+            workoutName: trimmed.isEmpty ? "Workout" : trimmed,
+            startedAt: Date(),
+            entries: []
+        )
+        save()
+    }
+
+    func cacheExerciseNames(_ names: [String]) {
+        exerciseNames = names
+        save()
+    }
+
+    /// New weight for the remaining (not yet done) sets of an exercise.
+    func changeWeight(entryIndex: Int, weightKg: Double) {
+        mutateWorkout { workout in
+            for s in workout.entries[entryIndex].sets.indices where !workout.entries[entryIndex].sets[s].completed {
+                workout.entries[entryIndex].sets[s].weightKg = max(0, weightKg)
+            }
+        }
+    }
+
+    /// Skip the rest of an exercise. Skipped entirely = no progression change; partly done = failed.
+    func skipExercise(entryIndex: Int) {
+        mutateWorkout { workout in
+            for s in workout.entries[entryIndex].sets.indices where !workout.entries[entryIndex].sets[s].completed {
+                workout.entries[entryIndex].sets[s].skipped = true
+            }
+        }
+    }
+
+    func unskipExercise(entryIndex: Int) {
+        mutateWorkout { workout in
+            for s in workout.entries[entryIndex].sets.indices {
+                workout.entries[entryIndex].sets[s].skipped = false
+            }
+        }
+    }
+
+    /// Add an extra set like the last one. Extra sets don't affect progression.
+    func addSet(entryIndex: Int) {
+        mutateWorkout { workout in
+            var entry = workout.entries[entryIndex]
+            let last = entry.sets.last
+            entry.sets.append(LocalSet(
+                setIndex: (last?.setIndex ?? 0) + 1,
+                targetReps: last?.targetReps ?? entry.plannedReps,
+                isAmrap: false,
+                weightKg: last?.weightKg ?? entry.plannedWeightKg
+            ))
+            for s in entry.sets.indices { entry.sets[s].skipped = false }
+            workout.entries[entryIndex] = entry
+        }
+    }
+
+    func addExercise(name: String, sets: Int, reps: Int, weightKg: Double) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, sets > 0, reps > 0 else { return }
+        mutateWorkout { workout in
+            workout.entries.append(LocalEntry(
+                planWorkoutExerciseId: nil,
+                exerciseId: nil,
+                exerciseName: trimmed,
+                plannedSets: sets,
+                plannedReps: reps,
+                plannedWeightKg: max(0, weightKg),
+                progressionProtocol: .basic,
+                tier: nil,
+                equipmentType: nil,
+                expectedRestSeconds: 90,
+                sets: (1...sets).map { LocalSet(setIndex: $0, targetReps: reps, isAmrap: false, weightKg: max(0, weightKg)) }
+            ))
+        }
+    }
+
+    /// Do a different exercise in this slot. Logged under the new name; no plan progression.
+    func swapExercise(entryIndex: Int, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        mutateWorkout { workout in
+            workout.entries[entryIndex].exerciseName = trimmed
+            workout.entries[entryIndex].exerciseId = nil
+            workout.entries[entryIndex].equipmentType = nil
+            workout.entries[entryIndex].tier = nil
+        }
+    }
+
+    private func mutateWorkout(_ change: (inout LocalWorkout) -> Void) {
+        guard var workout = activeWorkout else { return }
+        change(&workout)
         activeWorkout = workout
         save()
     }
@@ -473,6 +651,7 @@ final class OfflineWorkoutStore: ObservableObject {
         cachedPrescription = state.cachedPrescription
         prescriptionFetchedAt = state.prescriptionFetchedAt
         noActivePlan = state.noActivePlan
+        exerciseNames = state.exerciseNames ?? []
     }
 
     func save() {
@@ -482,7 +661,8 @@ final class OfflineWorkoutStore: ObservableObject {
             outbox: outbox,
             cachedPrescription: cachedPrescription,
             prescriptionFetchedAt: prescriptionFetchedAt,
-            noActivePlan: noActivePlan
+            noActivePlan: noActivePlan,
+            exerciseNames: exerciseNames
         )
         guard let data = try? JSONEncoder().encode(state) else { return }
         try? data.write(to: fileURL, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

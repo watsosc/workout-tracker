@@ -35,6 +35,32 @@ so logging works with no signal:
 - Limitation: after finishing a workout offline, the *next* workout can't be started until the
   first one uploads (the server decides what comes next).
 
+## In-workout changes
+
+Change weight, skip / swap / add-a-set per exercise (⋯ menu), add exercises, and start empty
+workouts — all on-device, so they work offline and upload with the workout. Finished workouts can
+be edited or deleted from History (online).
+
+## Tests
+
+- Unit tests (`WorkoutTrackerIOSTests` target, run with ⌘U or `xcodebuild test`): local workout
+  model, upload queue against a stubbed network, decoding data saved by older versions.
+- Live integration (`../scripts/test-ios-integration.sh`): compiles the sync code for macOS and
+  runs it against a throwaway backend.
+
+## Live Activity (lock screen + Dynamic Island)
+
+While a workout is in progress, a Live Activity shows the next set ("Squat · Set 3 of 5 · 3 reps @
+225 lb"), sets done, and a rest countdown to the rest target ("Rest's up" once reached). It follows
+the on-device workout (offline too) and ends when the workout is finished or discarded.
+
+- Lives in the `WorkoutLiveActivity` widget extension; shared data is
+  `WorkoutTrackerIOS/Shared/WorkoutActivityAttributes.swift`; the app side is
+  `Core/LiveActivityController.swift`.
+- Requires iOS 16.2+ (the app still supports 16.0 without it).
+- Installing on a device: select your team for **both** the `WorkoutTrackerIOS` and
+  `WorkoutLiveActivity` targets (Signing & Capabilities).
+
 ## Rest timer notifications
 
 After each set the app schedules a local notification for when the rest target is up (asks for

@@ -24,6 +24,8 @@
 	<string>Workout Tracker uses Bluetooth to read heart-rate data from your watch during workouts.</string>
 	<key>NSBluetoothPeripheralUsageDescription</key>
 	<string>Workout Tracker uses Bluetooth to read heart-rate data from your watch during workouts.</string>
+	<key>NSSupportsLiveActivities</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>

@@ -90,11 +90,13 @@ struct SessionSet: Codable, Identifiable {
     let durationSeconds: Int?
     let completed: Bool
     let completedAt: String?
+    let skipped: Bool?
 }
 
 struct SessionEntry: Codable, Identifiable {
     let id: Int
-    let planWorkoutExerciseId: Int
+    /// Nil for exercises added during the workout.
+    let planWorkoutExerciseId: Int?
     let equipmentType: String?
     let exerciseId: Int
     let exerciseName: String
@@ -125,10 +127,17 @@ struct WorkoutSession: Codable, Identifiable {
     let stravaActivityId: String?
     let stravaActivityUrl: String?
     let stravaLastError: String?
-    let planWorkoutId: Int
+    /// Nil for ad-hoc (empty) workouts.
+    let planWorkoutId: Int?
     let planWorkoutName: String
     let entries: [SessionEntry]
     let personalRecords: [PersonalRecord]?
+}
+
+struct WorkoutEditResult: Codable {
+    let ok: Bool
+    let message: String
+    let progressionRecalculated: Bool
 }
 
 struct PersonalRecord: Codable, Identifiable, Hashable {
@@ -195,7 +204,7 @@ struct WorkoutHistoryExercise: Codable, Identifiable {
 
 struct WorkoutHistoryItem: Codable, Identifiable {
     let sessionId: Int
-    let planRunId: Int
+    let planRunId: Int?
     let finishedAt: String?
     let planWorkoutName: String
     let workoutSequenceIndex: Int?

@@ -20,6 +20,13 @@ A **cost-first, single-user workout tracker** built for fast iteration and near-
 - Success/fail actions per set
 - AMRAP-aware flow (`X+ reps`), custom in-app AMRAP prompt
 - Undo the last logged set; after the final set you confirm **Finish** (so mistakes can still be fixed)
+- Failed sets ask how many reps you actually did; **Change weight** applies to the remaining sets
+- Mid-workout changes from the **Exercises** panel: skip, swap, add a set, add an exercise
+  - Skipping an exercise entirely leaves its progression unchanged; stopping partway counts as a fail
+  - Swapped/added exercises and extra sets are logged but don't drive plan progression
+- **Empty workouts** outside the plan (logged in history, plan untouched)
+- **Edit or delete finished workouts** from History. For your most recent workout, progression is
+  undone and re-applied with the fixes; older workouts are corrected in history/PRs/charts only
 - Exit menu: finish early (applies progression) or **discard** the workout (no progression, plan doesn't advance)
 - Warm-up ramp (bar → ~40/60/80%) and plates-per-side for barbell lifts (lb: 45 bar, kg: 20 bar)
 - Personal records (heaviest weight, estimated 1RM) shown when a workout finishes and in History
@@ -181,13 +188,15 @@ npm run check
 npm run build
 ```
 
-Backend tests:
+Tests (everything at once: `./scripts/test-all.sh`):
 
-```bash
-cd backend
-pip install '.[dev]'
-python -m pytest
-```
+| Suite | Command | Covers |
+|---|---|---|
+| Backend | `cd backend && pip install '.[dev]' && python -m pytest` | GraphQL API, progression, auth, migrations-era behaviour |
+| Web unit | `cd web && npm test` | plate/warm-up math, in-workout set logic |
+| Web e2e | `cd web && npx playwright install chromium && npm run test:e2e` | real browser against a throwaway backend: sign-in, full workout, history edit/delete, empty workout |
+| iOS unit | `xcodebuild test -project ios/WorkoutTrackerIOS.xcodeproj -scheme WorkoutTrackerIOS -destination 'platform=iOS Simulator,name=iPhone 17'` | local workout model, upload queue (stubbed network), old-data compatibility |
+| iOS integration | `./scripts/test-ios-integration.sh` | the app's sync code against a live backend |
 
 ---
 

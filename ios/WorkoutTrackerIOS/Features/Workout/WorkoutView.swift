@@ -28,6 +28,7 @@ final class WorkoutViewModel: ObservableObject {
             async let serverSession = api.fetchActiveSession()
             let (prescription, session) = try await (rx, serverSession)
             store.cachePrescription(prescription)
+            if let names = try? await api.fetchExerciseNames() { store.cacheExerciseNames(names) }
             if store.activeWorkout == nil, let session {
                 store.resumeServerWorkout(session, planName: prescription?.planName ?? "")
                 infoMessage = "Resumed the workout that was started on another device"
@@ -157,6 +158,19 @@ struct WorkoutView: View {
     @State private var repsEntryTarget = 0
     @State private var repsEntryIsAmrap = false
     @State private var confirmingDiscard = false
+    @State private var weightEntry: WeightEntry?
+    @State private var showingAddExercise = false
+    @State private var swapEntryIndex: Int?
+    @State private var swapName = ""
+    @State private var showingEmptyWorkoutName = false
+    @State private var emptyWorkoutName = "Workout"
+
+    private struct WeightEntry: Identifiable {
+        let entryIndex: Int
+        let exerciseName: String
+        var value: String
+        var id: Int { entryIndex }
+    }
 
     private var api: WorkoutAPI { settings.api }
     private var unit: WeightUnit { settings.weightUnit }
@@ -213,6 +227,51 @@ struct WorkoutView: View {
                 Button("Keep going", role: .cancel) {}
             } message: {
                 Text("Logged sets are thrown away and the plan does not advance.")
+            }
+            .sheet(item: $weightEntry) { entry in
+                WeightEntrySheet(
+                    title: entry.exerciseName,
+                    unit: unit,
+                    initial: entry.value,
+                    onCancel: { weightEntry = nil },
+                    onSave: { value in
+                        store.changeWeight(entryIndex: entry.entryIndex, weightKg: WeightMath.convertUnitToKg(value, unit: unit))
+                        weightEntry = nil
+                    }
+                )
+                .presentationDetents([.height(260)])
+            }
+            .sheet(isPresented: $showingAddExercise) {
+                AddExerciseSheet(unit: unit, suggestions: store.exerciseNames) { name, sets, reps, weight in
+                    store.addExercise(name: name, sets: sets, reps: reps, weightKg: WeightMath.convertUnitToKg(weight, unit: unit))
+                    showingAddExercise = false
+                } onCancel: {
+                    showingAddExercise = false
+                }
+            }
+            .alert("Swap exercise", isPresented: Binding(
+                get: { swapEntryIndex != nil },
+                set: { if !$0 { swapEntryIndex = nil } }
+            )) {
+                TextField("Exercise name", text: $swapName)
+                Button("Swap") {
+                    if let index = swapEntryIndex { store.swapExercise(entryIndex: index, to: swapName) }
+                    swapEntryIndex = nil
+                }
+                Button("Cancel", role: .cancel) { swapEntryIndex = nil }
+            } message: {
+                Text("Swapped exercises are logged but don't change the plan's progression.")
+            }
+            .alert("Empty workout", isPresented: $showingEmptyWorkoutName) {
+                TextField("Name", text: $emptyWorkoutName)
+                Button("Start") {
+                    RestTimerNotifier.shared.requestAuthorizationIfNeeded()
+                    store.startEmptyWorkout(name: emptyWorkoutName)
+                    showingAddExercise = true
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Not part of your plan. Add exercises as you go.")
             }
             .sheet(isPresented: $showingRepsEntry) {
                 RepsEntrySheet(
@@ -338,7 +397,14 @@ struct WorkoutView: View {
             }
         }
 
-        if let pending {
+        if workout.entries.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Add an exercise to get started.")
+                    .foregroundStyle(.secondary)
+                Button("Add exercise") { showingAddExercise = true }
+                    .buttonStyle(.borderedProminent)
+            }
+        } else if let pending {
             let entry = workout.entries[pending.entryIndex]
             let set = entry.sets[pending.setIndex]
             let targetReps = set.targetReps ?? entry.plannedReps
@@ -354,10 +420,20 @@ struct WorkoutView: View {
                         .bold()
                     Text("Set \(set.setIndex) of \(entry.sets.count) · \(targetReps)\(set.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(set.weightKg, unit: unit)) \(unit.label)")
                         .foregroundStyle(.secondary)
-                    if isBarbell {
-                        Text(BarbellMath.formatPlates(total: displayWeight, unit: unit))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
+                    HStack(spacing: 12) {
+                        Button("Change weight") {
+                            weightEntry = WeightEntry(
+                                entryIndex: pending.entryIndex,
+                                exerciseName: entry.exerciseName,
+                                value: WeightMath.displayWeightFromKg(set.weightKg, unit: unit)
+                            )
+                        }
+                        .font(.footnote)
+                        if isBarbell {
+                            Text(BarbellMath.formatPlates(total: displayWeight, unit: unit))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                        }
                     }
                 }
 
@@ -374,7 +450,7 @@ struct WorkoutView: View {
         } else {
             VStack(alignment: .leading, spacing: 10) {
                 Text("All sets complete 🎉").font(.title3.bold())
-                Text("Logged one wrong? Undo it before finishing.")
+                Text("Logged one wrong? Undo it before finishing. Need more? Add a set or exercise below.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 Button("Finish workout") { model.finishWorkout(store: store) }
@@ -387,16 +463,41 @@ struct WorkoutView: View {
         }
 
         Divider()
-        ForEach(workout.entries) { entry in
+        ForEach(Array(workout.entries.enumerated()), id: \.element.id) { index, entry in
             HStack(alignment: .center, spacing: 10) {
-                Text(entry.exerciseName)
-                    .bold()
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(entry.exerciseName)
+                        .bold()
+                        .strikethrough(entry.isSkipped)
+                    Text(entryStatusText(entry))
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
-                Text("\(entry.sets.filter(\.completed).count)/\(entry.sets.count) · \(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: unit)) \(unit.label)")
-                    .foregroundStyle(.secondary)
+                Menu {
+                    if entry.isSkipped {
+                        Button("Unskip") { store.unskipExercise(entryIndex: index) }
+                    } else if !entry.isDone {
+                        Button("Skip exercise") { store.skipExercise(entryIndex: index) }
+                    }
+                    Button("Swap exercise…") {
+                        swapName = ""
+                        swapEntryIndex = index
+                    }
+                    Button("Add a set") { store.addSet(entryIndex: index) }
+                } label: {
+                    Image(systemName: "ellipsis.circle").font(.title3)
+                }
+                .accessibilityLabel("Options for \(entry.exerciseName)")
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
+        }
+
+        Button {
+            showingAddExercise = true
+        } label: {
+            Label("Add exercise", systemImage: "plus")
         }
 
         HStack(spacing: 10) {
@@ -410,6 +511,14 @@ struct WorkoutView: View {
                 .frame(maxWidth: .infinity)
         }
         .padding(.vertical, 12)
+    }
+
+    private func entryStatusText(_ entry: LocalEntry) -> String {
+        let done = entry.sets.filter(\.completed).count
+        var text = "\(done)/\(entry.sets.count) sets · \(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.sets.first(where: \.isOpen)?.weightKg ?? entry.plannedWeightKg, unit: unit)) \(unit.label)"
+        if entry.isSkipped { text += " · skipped" }
+        if entry.isAdded { text += " · added" }
+        return text
     }
 
     private func warmupPanel(_ sets: [WarmupSet]) -> some View {
@@ -467,6 +576,12 @@ struct WorkoutView: View {
             }
             .buttonStyle(.borderedProminent)
             .disabled(model.loading || store.cachedPrescription?.blockedReason != nil)
+
+            Button("Start empty workout") {
+                emptyWorkoutName = "Workout"
+                showingEmptyWorkoutName = true
+            }
+            .buttonStyle(.bordered)
         }
     }
 
@@ -708,6 +823,94 @@ private struct RepsEntrySheet: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save", action: onSubmit)
+                }
+            }
+        }
+    }
+}
+
+private struct WeightEntrySheet: View {
+    let title: String
+    let unit: WeightUnit
+    let onCancel: () -> Void
+    let onSave: (Double) -> Void
+    @State private var value: String
+
+    init(title: String, unit: WeightUnit, initial: String, onCancel: @escaping () -> Void, onSave: @escaping (Double) -> Void) {
+        self.title = title
+        self.unit = unit
+        self.onCancel = onCancel
+        self.onSave = onSave
+        _value = State(initialValue: initial)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("Weight (\(unit.label))", text: $value)
+                        .keyboardType(.decimalPad)
+                } footer: {
+                    Text("Applies to the remaining sets of \(title).")
+                }
+            }
+            .navigationTitle("Weight (\(unit.label))")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") {
+                        if let weight = Double(value.replacingOccurrences(of: ",", with: ".")), weight >= 0 { onSave(weight) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct AddExerciseSheet: View {
+    let unit: WeightUnit
+    let suggestions: [String]
+    let onAdd: (String, Int, Int, Double) -> Void
+    let onCancel: () -> Void
+    @State private var name = ""
+    @State private var sets = 3
+    @State private var reps = 10
+    @State private var weight = "0"
+
+    private var matches: [String] {
+        let query = name.trimmingCharacters(in: .whitespaces).lowercased()
+        guard !query.isEmpty else { return [] }
+        return Array(suggestions.filter { $0.lowercased().contains(query) && $0.lowercased() != query }.prefix(5))
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Exercise") {
+                    TextField("Name", text: $name)
+                        .autocorrectionDisabled()
+                    ForEach(matches, id: \.self) { match in
+                        Button(match) { name = match }
+                    }
+                }
+                Section {
+                    Stepper("Sets: \(sets)", value: $sets, in: 1...20)
+                    Stepper("Reps: \(reps)", value: $reps, in: 1...100)
+                    TextField("Weight (\(unit.label))", text: $weight)
+                        .keyboardType(.decimalPad)
+                } footer: {
+                    Text("Added exercises are logged but aren't part of the plan's progression.")
+                }
+            }
+            .navigationTitle("Add exercise")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        let value = Double(weight.replacingOccurrences(of: ",", with: ".")) ?? 0
+                        onAdd(name, sets, reps, max(0, value))
+                    }
+                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }
         }

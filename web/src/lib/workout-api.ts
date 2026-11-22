@@ -94,10 +94,10 @@ const stravaConnectionQuery = `
 	}
 `;
 
-const activeSessionQuery = `
-	query ActiveSession {
-		activeWorkoutSession {
+const SESSION_FIELDS = `
 			id
+			planWorkoutId
+			planWorkoutName
 			status
 			startedAt
 			finishedAt
@@ -110,7 +110,9 @@ const activeSessionQuery = `
 			stravaLastError
 			entries {
 				id
+				planWorkoutExerciseId
 				exerciseId
+				planWorkoutExerciseId
 				exerciseName
 				equipmentType
 				plannedSets
@@ -129,9 +131,21 @@ const activeSessionQuery = `
 					durationSeconds
 					completed
 					completedAt
+					skipped
 				}
 			}
-		}
+			personalRecords {
+				exerciseName
+				kind
+				valueKg
+				reps
+				previousKg
+			}
+`;
+
+const activeSessionQuery = `
+	query ActiveSession {
+		activeWorkoutSession { ${SESSION_FIELDS} }
 	}
 `;
 
@@ -634,6 +648,96 @@ export async function completeSet(input: {
 export async function finishWorkout(sessionId: number): Promise<WorkoutSession> {
 	const data = await gql<{ finishWorkout: WorkoutSession }>(finishWorkoutMutation, { sessionId });
 	return data.finishWorkout;
+}
+
+// ---------------------------------------------------------------- mid-workout changes
+
+async function sessionMutation(name: string, signature: string, args: string, variables: Record<string, unknown>) {
+	const data = await gql<Record<string, WorkoutSession>>(
+		`mutation ${name[0].toUpperCase()}${name.slice(1)}${signature} { ${name}${args} { ${SESSION_FIELDS} } }`,
+		variables
+	);
+	return data[name];
+}
+
+export function startEmptyWorkout(name?: string): Promise<WorkoutSession> {
+	return sessionMutation('startEmptyWorkout', '($name: String)', '(name: $name)', { name: name ?? null });
+}
+
+export function addExerciseToWorkout(input: {
+	sessionId: number;
+	exerciseName: string;
+	sets: number;
+	reps: number;
+	weightKg: number;
+}): Promise<WorkoutSession> {
+	return sessionMutation(
+		'addExerciseToWorkout',
+		'($sessionId: Int!, $exerciseName: String!, $sets: Int!, $reps: Int!, $weightKg: Float!)',
+		'(sessionId: $sessionId, exerciseName: $exerciseName, sets: $sets, reps: $reps, weightKg: $weightKg)',
+		input
+	);
+}
+
+export function swapExercise(entryId: number, exerciseName: string): Promise<WorkoutSession> {
+	return sessionMutation(
+		'swapExercise',
+		'($entryId: Int!, $exerciseName: String!)',
+		'(entryId: $entryId, exerciseName: $exerciseName)',
+		{ entryId, exerciseName }
+	);
+}
+
+export function skipExercise(entryId: number): Promise<WorkoutSession> {
+	return sessionMutation('skipExercise', '($entryId: Int!)', '(entryId: $entryId)', { entryId });
+}
+
+export function unskipExercise(entryId: number): Promise<WorkoutSession> {
+	return sessionMutation('unskipExercise', '($entryId: Int!)', '(entryId: $entryId)', { entryId });
+}
+
+export function addSet(entryId: number): Promise<WorkoutSession> {
+	return sessionMutation('addSet', '($entryId: Int!)', '(entryId: $entryId)', { entryId });
+}
+
+export async function fetchExerciseNames(): Promise<string[]> {
+	const data = await gql<{ exercises: { name: string }[] }>(`query Exercises { exercises { name } }`);
+	return data.exercises.map((e) => e.name);
+}
+
+// ---------------------------------------------------------------- editing history
+
+export type WorkoutEditResult = { ok: boolean; message: string; progressionRecalculated: boolean };
+
+export async function fetchWorkoutSession(sessionId: number): Promise<WorkoutSession | null> {
+	const data = await gql<{ workoutSession: WorkoutSession | null }>(
+		`query WorkoutSession($sessionId: Int!) { workoutSession(sessionId: $sessionId) { ${SESSION_FIELDS} } }`,
+		{ sessionId }
+	);
+	return data.workoutSession;
+}
+
+export async function updateWorkout(
+	sessionId: number,
+	sets: { sessionSetId: number; repsCompleted: number | null; weightKg: number | null; completed: boolean }[]
+): Promise<WorkoutEditResult> {
+	const data = await gql<{ updateWorkout: WorkoutEditResult }>(
+		`mutation UpdateWorkout($sessionId: Int!, $sets: [SetEditInput!]!) {
+			updateWorkout(sessionId: $sessionId, sets: $sets) { ok message progressionRecalculated }
+		}`,
+		{ sessionId, sets }
+	);
+	if (!data.updateWorkout.ok) throw new Error(data.updateWorkout.message);
+	return data.updateWorkout;
+}
+
+export async function deleteWorkout(sessionId: number): Promise<WorkoutEditResult> {
+	const data = await gql<{ deleteWorkout: WorkoutEditResult }>(
+		`mutation DeleteWorkout($sessionId: Int!) { deleteWorkout(sessionId: $sessionId) { ok message progressionRecalculated } }`,
+		{ sessionId }
+	);
+	if (!data.deleteWorkout.ok) throw new Error(data.deleteWorkout.message);
+	return data.deleteWorkout;
 }
 
 export async function cancelWorkout(sessionId: number): Promise<string> {
