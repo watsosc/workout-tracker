@@ -33,9 +33,10 @@ struct SignInView: View {
                         Text("Workouts saved on this phone will upload once you're signed in.")
                     }
                 }
+                .neonRows()
 
                 if !errorMessage.isEmpty {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage).font(Neon.mono(13)).foregroundStyle(Neon.red)
                 }
 
                 Button {
@@ -45,7 +46,8 @@ struct SignInView: View {
                 }
                 .disabled(working || username.isEmpty || password.isEmpty)
             }
-            .navigationTitle("Sign in")
+            .neonForm()
+            .navigationTitle("SIGN IN")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Not now") {

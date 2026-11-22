@@ -97,21 +97,24 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("API") {
+                Section {
                     TextField("GraphQL endpoint", text: $settings.graphqlEndpoint)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                     Text("Use your hosted backend URL ending in /graphql.")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                        .font(Neon.mono(12, relativeTo: .footnote))
+                        .foregroundStyle(Neon.muted)
+                } header: {
+                    NeonSectionHeader(text: "API")
                 }
+                .neonRows()
 
-                Section("Account") {
+                Section {
                     if let username = settings.signedInUsername, settings.sessionToken != nil {
                         HStack {
                             Text("Signed in as")
                             Spacer()
-                            Text(username).foregroundStyle(.secondary)
+                            Text(username).foregroundStyle(Neon.muted)
                         }
                         Button("Sign out", role: .destructive) {
                             Task { await settings.signOut() }
@@ -119,22 +122,25 @@ struct SettingsView: View {
                     } else {
                         Button("Sign in") { settings.needsSignIn = true }
                     }
+                } header: {
+                    NeonSectionHeader(text: "Account")
                 }
+                .neonRows()
 
                 Section {
                     if store.outbox.isEmpty {
                         Text("Everything is uploaded.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Neon.muted)
                     }
                     ForEach(store.outbox) { item in
                         VStack(alignment: .leading, spacing: 4) {
                             Text(item.title).font(.headline)
                             Text("Saved \(item.createdAt.formatted(date: .abbreviated, time: .shortened))")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                                .font(Neon.mono(12, relativeTo: .footnote))
+                                .foregroundStyle(Neon.muted)
                             if let error = item.lastError {
                                 Text(error)
-                                    .font(.footnote)
+                                    .font(Neon.mono(12, relativeTo: .footnote))
                                     .foregroundStyle(item.needsAttention ? .red : .orange)
                             }
                             if item.needsAttention {
@@ -153,22 +159,24 @@ struct SettingsView: View {
                         }
                         .disabled(store.isSyncing)
                     }
-                } header: {
-                    Text("Uploads")
-                } footer: {
-                    Text("Workouts are saved on this phone first and upload automatically when there's a connection.")
+                } header: { NeonSectionHeader(text: "Uploads") } footer: {
+                    NeonFootnote(text: "Workouts are saved on this phone first and upload automatically when there's a connection.")
                 }
+                .neonRows()
 
-                Section("Units") {
+                Section {
                     Picker("Weight unit", selection: $settings.weightUnit) {
                         ForEach(WeightUnit.allCases) { unit in
                             Text(unit.rawValue).tag(unit)
                         }
                     }
                     .pickerStyle(.segmented)
+                } header: {
+                    NeonSectionHeader(text: "Units")
                 }
+                .neonRows()
 
-                Section("Plans") {
+                Section {
                     NavigationLink {
                         PlansView()
                     } label: {
@@ -176,12 +184,15 @@ struct SettingsView: View {
                             Text("Active plan")
                             Spacer()
                             Text(model.activePlan?.name ?? "None")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Neon.muted)
                         }
                     }
+                } header: {
+                    NeonSectionHeader(text: "Plans")
                 }
+                .neonRows()
 
-                Section("Strava") {
+                Section {
                     if let strava = model.stravaConnection {
                         if !strava.configured {
                             Text("Strava is not configured on the backend.")
@@ -193,12 +204,15 @@ struct SettingsView: View {
                             Button("Disconnect") { Task { await model.disconnectStrava(api: api); await model.load(using: api, unit: settings.weightUnit) } }
                         } else {
                             Text("Connect Strava from the web app for now.")
-                                .foregroundStyle(.secondary)
+                                .foregroundStyle(Neon.muted)
                         }
                     }
+                } header: {
+                    NeonSectionHeader(text: "Strava")
                 }
+                .neonRows()
 
-                Section("Training actions") {
+                Section {
                     ForEach(model.baselines) { row in
                         VStack(alignment: .leading) {
                             Text(row.exerciseName).font(.headline)
@@ -225,18 +239,22 @@ struct SettingsView: View {
                     Button("Reset progression") {
                         Task { await model.resetProgress(unit: settings.weightUnit, api: api); await model.load(using: api, unit: settings.weightUnit) }
                     }
+                } header: {
+                    NeonSectionHeader(text: "Training actions")
                 }
+                .neonRows()
 
                 if !model.errorMessage.isEmpty {
-                    Text(model.errorMessage).foregroundStyle(.red)
+                    Text(model.errorMessage).font(Neon.mono(13)).foregroundStyle(Neon.red)
                 }
                 if !model.infoMessage.isEmpty {
-                    Text(model.infoMessage).foregroundStyle(.green)
+                    Text(model.infoMessage).font(Neon.mono(13)).foregroundStyle(Neon.cyan)
                 }
             }
-            .navigationTitle("Settings")
+            .neonForm()
+            .navigationTitle("SETTINGS")
             .task { await model.load(using: api, unit: settings.weightUnit) }
-            .onChange(of: settings.weightUnit) { _ in
+            .onChange(of: settings.weightUnit) {
                 Task { await model.load(using: api, unit: settings.weightUnit) }
             }
         }

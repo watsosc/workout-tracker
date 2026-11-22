@@ -12,6 +12,8 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     @Published private(set) var samples: [LiveHeartRateSample] = []
     @Published private(set) var latestBpm: Int?
     @Published private(set) var isReceivingData = false
+    /// A device exposing the Heart Rate service is connected and subscribed (or the mock stream is on).
+    @Published private(set) var isHeartRateDeviceConnected = false
     @Published private(set) var statusText = "Disconnected"
 
     private var central: CBCentralManager?
@@ -34,6 +36,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
 
         if shouldUseMockHeartRate {
             statusText = "Mock heart-rate stream"
+            isHeartRateDeviceConnected = true
             startMockStream()
             return
         }
@@ -58,6 +61,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
         }
         peripheral = nil
         heartRateCharacteristic = nil
+        isHeartRateDeviceConnected = false
 
         latestBpm = nil
         samples = []
@@ -184,6 +188,7 @@ extension HeartRateBluetoothManager: CBCentralManagerDelegate {
         Task { @MainActor in
             self.peripheral = nil
             self.heartRateCharacteristic = nil
+            isHeartRateDeviceConnected = false
             isReceivingData = false
             statusText = "Disconnected, scanning..."
             startScanningIfReady()
@@ -218,6 +223,7 @@ extension HeartRateBluetoothManager: CBPeripheralDelegate {
             }
             heartRateCharacteristic = characteristic
             peripheral.setNotifyValue(true, for: characteristic)
+            isHeartRateDeviceConnected = true
             statusText = "Waiting for heart-rate data"
         }
     }

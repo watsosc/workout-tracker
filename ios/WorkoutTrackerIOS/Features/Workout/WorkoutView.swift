@@ -177,49 +177,45 @@ struct WorkoutView: View {
 
     var body: some View {
         NavigationStack {
-            ZStack(alignment: .bottomTrailing) {
-                Color(red: 11 / 255, green: 18 / 255, blue: 32 / 255)
-                    .ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    header
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if model.loading {
-                            ProgressView()
-                        }
-
-                        statusBanners
-
-                        if !model.errorMessage.isEmpty {
-                            Text(model.errorMessage)
-                                .foregroundStyle(.red)
-                        }
-
-                        if !model.infoMessage.isEmpty {
-                            Text(model.infoMessage)
-                                .foregroundStyle(.green)
-                        }
-
-                        if let workout = store.activeWorkout {
-                            activeWorkoutPanel(workout)
-                        } else {
-                            startPanel
-                        }
+                    if model.loading {
+                        ProgressView().tint(Neon.yellow)
                     }
-                    .padding()
-                }
 
-                if store.activeWorkout != nil {
-                    bluetoothIndicator
-                        .padding(.trailing, 16)
-                        .padding(.bottom, 16)
+                    statusBanners
+
+                    if !model.errorMessage.isEmpty {
+                        Text(model.errorMessage.uppercased())
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(Neon.red)
+                    }
+
+                    if !model.infoMessage.isEmpty {
+                        Text(model.infoMessage.uppercased())
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(Neon.cyan)
+                    }
+
+                    if let workout = store.activeWorkout {
+                        activeWorkoutPanel(workout)
+                    } else {
+                        startPanel
+                    }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("Workout")
+            .scrollIndicators(.hidden)
+            .background(NeonBackground())
+            .toolbar(.hidden, for: .navigationBar)
             .task {
                 await model.load(api: api, store: store)
                 syncHeartRateAndTicker()
             }
-            .onChange(of: store.activeWorkout?.clientId) { _ in
+            .onChange(of: store.activeWorkout?.clientId) {
                 syncHeartRateAndTicker()
             }
             .confirmationDialog("Discard this workout?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
@@ -296,6 +292,52 @@ struct WorkoutView: View {
         }
     }
 
+    // MARK: Header
+
+    @ViewBuilder
+    private var header: some View {
+        if let workout = store.activeWorkout {
+            VStack(alignment: .leading, spacing: 2) {
+                Kicker(text: workout.planWorkoutId == nil ? "OFF-PLAN // FREESTYLE" : "\(workout.planName) // IN PROGRESS", color: Neon.pink)
+                HStack(alignment: .center) {
+                    Text(workout.workoutName.uppercased())
+                        .font(Neon.head(30, .bold, relativeTo: .largeTitle))
+                        .tracking(1.5)
+                        .foregroundStyle(Neon.white)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Spacer()
+                    if workout.lastCompletedPosition() != nil {
+                        Button {
+                            model.undoLastSet(store: store)
+                        } label: {
+                            Text("↶ UNDO SET")
+                                .font(Neon.mono(12, relativeTo: .caption))
+                                .tracking(1)
+                                .foregroundStyle(Neon.cyan)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .background(Neon.cyan.opacity(0.06), in: CutCornerShape(cut: 8))
+                                .overlay(CutCornerShape(cut: 8).strokeBorder(Neon.cyan.opacity(0.5), lineWidth: 1))
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+            .padding(.top, 8)
+        } else {
+            VStack(alignment: .leading, spacing: 0) {
+                Kicker(text: "NIGHT CITY BARBELL CLUB", color: Neon.pink)
+                Text("WORKOUT")
+                    .font(Neon.head(44, .bold, relativeTo: .largeTitle))
+                    .tracking(2)
+                    .foregroundStyle(Neon.yellow)
+                    .glitch(2)
+            }
+            .padding(.top, 8)
+        }
+    }
+
     private func syncHeartRateAndTicker() {
         if store.activeWorkout != nil {
             let workoutStore = store
@@ -314,67 +356,99 @@ struct WorkoutView: View {
     @ViewBuilder
     private var statusBanners: some View {
         if !store.isOnline {
-            Label(
+            Text(
                 store.activeWorkout != nil
-                    ? "Offline — this workout is saved on your phone and uploads when you're back online."
-                    : "Offline — using your plan as of \(cachedAgeText).",
-                systemImage: "wifi.slash"
+                    ? "⚠ OFFLINE // SAVED ON THIS PHONE, UPLOADS WHEN BACK ONLINE"
+                    : "⚠ OFFLINE // PLAN CACHED \(cachedAgeText.uppercased())"
             )
-            .font(.footnote)
-            .foregroundStyle(.orange)
+            .font(Neon.mono(12, relativeTo: .footnote))
+            .tracking(0.8)
+            .foregroundStyle(.black)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Neon.yellow)
         }
 
         if store.pendingUploadCount > 0 {
             HStack {
-                Label(
+                Text(
                     store.outbox.contains(where: \.needsAttention)
-                        ? "An upload needs attention (Settings → Uploads)"
-                        : "\(store.pendingUploadCount) waiting to upload",
-                    systemImage: "icloud.and.arrow.up"
+                        ? "⇡ UPLOAD NEEDS ATTENTION // SETTINGS"
+                        : "⇡ \(store.pendingUploadCount) WAITING TO UPLOAD"
                 )
-                .font(.footnote)
+                .font(Neon.mono(12, relativeTo: .footnote))
+                .tracking(0.8)
                 Spacer()
                 if store.isSyncing {
-                    ProgressView()
+                    ProgressView().tint(Neon.cyan)
                 } else {
                     Button("Sync now") { Task { await store.syncNow() } }
-                        .font(.footnote)
+                        .buttonStyle(NeonLinkStyle(color: Neon.cyan))
                 }
             }
-            .padding(10)
-            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+            .foregroundStyle(Neon.cyan)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(Neon.cyan.opacity(0.05))
+            .overlay(Rectangle().strokeBorder(Neon.cyan.opacity(0.45), lineWidth: 1))
         }
 
         if let upload = store.lastUpload {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(upload.wasQueued ? "Uploaded \(upload.workoutName)" : "\(upload.workoutName) saved")
-                        .font(.footnote.weight(.semibold))
+                    Kicker(text: upload.wasQueued ? "// UPLOADED \(upload.workoutName)" : "// \(upload.workoutName) SAVED", color: Neon.pink)
                     Spacer()
                     Button {
                         store.lastUpload = nil
                     } label: {
-                        Image(systemName: "xmark").font(.caption)
+                        Text("✕").font(Neon.mono(14)).foregroundStyle(Neon.muted)
                     }
                     .buttonStyle(.plain)
+                    .accessibilityLabel("Dismiss")
+                }
+                if !upload.personalRecords.isEmpty {
+                    Text("NEW PERSONAL RECORDS")
+                        .font(Neon.head(18, .bold, relativeTo: .headline))
+                        .tracking(1)
+                        .foregroundStyle(Neon.white)
                 }
                 ForEach(upload.personalRecords) { pr in
-                    Text("🏆 New PR · \(pr.describe(unit: unit))")
-                        .font(.footnote)
+                    HStack {
+                        Text(pr.exerciseName.uppercased())
+                            .font(Neon.head(15, .semibold))
+                        Spacer()
+                        Text(prValue(pr))
+                            .font(Neon.mono(15))
+                            .foregroundStyle(Neon.pink)
+                    }
+                    .padding(.vertical, 4)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Neon.pink.opacity(0.2)).frame(height: 1) }
                 }
                 if upload.stravaStatus == .sent {
-                    Text("Sent to Strava").font(.footnote).foregroundStyle(.secondary)
+                    Text("↗ SENT TO STRAVA").font(Neon.mono(12)).foregroundStyle(Neon.cyan)
                 } else if upload.stravaStatus == .failed {
-                    Text("Strava upload failed — retry from History").font(.footnote).foregroundStyle(.red)
+                    Text("STRAVA UPLOAD FAILED // RETRY FROM HISTORY").font(Neon.mono(12)).foregroundStyle(Neon.red)
                 }
             }
-            .padding(10)
-            .background(Color.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+            .neonPanel(
+                edge: Neon.pink,
+                fill: Neon.panel
+            )
+            .background(
+                LinearGradient(colors: [Neon.pink.opacity(0.18), .clear], startPoint: .topLeading, endPoint: .center)
+                    .clipShape(CutCornerShape())
+            )
         }
     }
 
+    private func prValue(_ pr: PersonalRecord) -> String {
+        let value = "\(WeightMath.displayWeightFromKg(pr.valueKg, unit: unit)) \(unit.label.uppercased())"
+        return pr.kind == "WEIGHT" ? "\(value) × \(pr.reps)" : "EST. 1RM \(value)"
+    }
+
     private var cachedAgeText: String {
-        guard let at = store.prescriptionFetchedAt else { return "the last sync" }
+        guard let at = store.prescriptionFetchedAt else { return "at the last sync" }
         return at.formatted(.relative(presentation: .named))
     }
 
@@ -384,26 +458,16 @@ struct WorkoutView: View {
     private func activeWorkoutPanel(_ workout: LocalWorkout) -> some View {
         let pending = workout.pendingSetPosition()
 
-        HStack {
-            Text(workout.workoutName).font(.headline)
-            Spacer()
-            if workout.lastCompletedPosition() != nil {
-                Button {
-                    model.undoLastSet(store: store)
-                } label: {
-                    Label("Undo set", systemImage: "arrow.uturn.backward")
-                }
-                .buttonStyle(.bordered)
-            }
-        }
-
         if workout.entries.isEmpty {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("Add an exercise to get started.")
-                    .foregroundStyle(.secondary)
-                Button("Add exercise") { showingAddExercise = true }
-                    .buttonStyle(.borderedProminent)
+            VStack(alignment: .leading, spacing: 12) {
+                Kicker(text: "// EMPTY WORKOUT", color: Neon.cyan)
+                Text("ADD AN EXERCISE TO GET STARTED")
+                    .font(Neon.head(20, .bold, relativeTo: .title3))
+                    .foregroundStyle(Neon.white)
+                Button("+ Add exercise") { showingAddExercise = true }
+                    .buttonStyle(NeonButtonStyle(kind: .primary))
             }
+            .neonPanel(edge: Neon.heroEdge)
         } else if let pending {
             let entry = workout.entries[pending.entryIndex]
             let set = entry.sets[pending.setIndex]
@@ -414,13 +478,22 @@ struct WorkoutView: View {
             VStack(alignment: .leading, spacing: 14) {
                 timerPanel(restTarget: entry.restTargetSeconds)
 
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(entry.exerciseName)
-                        .font(.title2)
-                        .bold()
-                    Text("Set \(set.setIndex) of \(entry.sets.count) · \(targetReps)\(set.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(set.weightKg, unit: unit)) \(unit.label)")
-                        .foregroundStyle(.secondary)
-                    HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 6) {
+                    HStack(spacing: 6) {
+                        if let tier = entry.tier { NeonTag(text: tier, style: tier == "T1" ? .yellow : tier == "T3" ? .pink : .plain) }
+                        NeonTag(text: String(format: "SET %02d/%02d", set.setIndex, entry.sets.count))
+                        if set.isAmrap { NeonTag(text: "AMRAP", style: .pink) }
+                        if entry.isAdded { NeonTag(text: "ADDED", style: .cyan) }
+                    }
+                    Text(entry.exerciseName.uppercased())
+                        .font(Neon.head(30, .bold, relativeTo: .title))
+                        .tracking(1.2)
+                        .foregroundStyle(Neon.white)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.7)
+                        .glitch(1)
+                    setLine(reps: targetReps, isAmrap: set.isAmrap, weightKg: set.weightKg)
+                    HStack(spacing: 14) {
                         Button("Change weight") {
                             weightEntry = WeightEntry(
                                 entryIndex: pending.entryIndex,
@@ -428,11 +501,11 @@ struct WorkoutView: View {
                                 value: WeightMath.displayWeightFromKg(set.weightKg, unit: unit)
                             )
                         }
-                        .font(.footnote)
+                        .buttonStyle(NeonLinkStyle())
                         if isBarbell {
-                            Text(BarbellMath.formatPlates(total: displayWeight, unit: unit))
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
+                            Text(BarbellMath.formatPlates(total: displayWeight, unit: unit).uppercased())
+                                .font(Neon.mono(12, relativeTo: .footnote))
+                                .foregroundStyle(Neon.cyan)
                         }
                     }
                 }
@@ -445,150 +518,217 @@ struct WorkoutView: View {
 
                 outcomeSelector(targetReps: targetReps, isAmrap: set.isAmrap)
             }
-            .padding(12)
-            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 14))
+            .neonPanel(edge: Neon.heroEdge)
         } else {
-            VStack(alignment: .leading, spacing: 10) {
-                Text("All sets complete 🎉").font(.title3.bold())
+            VStack(alignment: .leading, spacing: 8) {
+                Kicker(text: "ALL SETS LOGGED // \(workout.completedSetCount)/\(workout.totalSetCount)", color: Neon.cyan)
+                Text("FLATLINED IT")
+                    .font(Neon.head(36, .bold, relativeTo: .largeTitle))
+                    .tracking(1.5)
+                    .foregroundStyle(Neon.yellow)
+                    .glitch(2)
                 Text("Logged one wrong? Undo it before finishing. Need more? Add a set or exercise below.")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                    .font(Neon.mono(13, relativeTo: .footnote))
+                    .foregroundStyle(Neon.muted)
                 Button("Finish workout") { model.finishWorkout(store: store) }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.large)
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(NeonButtonStyle(kind: .hazard))
+                    .padding(.top, 6)
             }
-            .padding(12)
-            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 14))
+            .neonPanel(edge: Neon.yellow)
         }
 
-        Divider()
-        ForEach(Array(workout.entries.enumerated()), id: \.element.id) { index, entry in
-            HStack(alignment: .center, spacing: 10) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(entry.exerciseName)
-                        .bold()
-                        .strikethrough(entry.isSkipped)
-                    Text(entryStatusText(entry))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
-                }
-                Spacer()
-                Menu {
-                    if entry.isSkipped {
-                        Button("Unskip") { store.unskipExercise(entryIndex: index) }
-                    } else if !entry.isDone {
-                        Button("Skip exercise") { store.skipExercise(entryIndex: index) }
-                    }
-                    Button("Swap exercise…") {
-                        swapName = ""
-                        swapEntryIndex = index
-                    }
-                    Button("Add a set") { store.addSet(entryIndex: index) }
-                } label: {
-                    Image(systemName: "ellipsis.circle").font(.title3)
-                }
-                .accessibilityLabel("Options for \(entry.exerciseName)")
+        Kicker(text: "// QUEUE").padding(.top, 6)
+
+        VStack(spacing: 6) {
+            ForEach(Array(workout.entries.enumerated()), id: \.element.id) { index, entry in
+                queueRow(entry, index: index)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.vertical, 6)
         }
 
         Button {
             showingAddExercise = true
         } label: {
-            Label("Add exercise", systemImage: "plus")
+            Text("+ ADD EXERCISE")
+                .font(Neon.mono(14, relativeTo: .callout))
+                .tracking(1.5)
+                .foregroundStyle(Neon.yellow)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 11)
+                .overlay(Rectangle().strokeBorder(Neon.yellow.opacity(0.45), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
         }
+        .buttonStyle(.plain)
 
         HStack(spacing: 10) {
             if pending != nil {
                 Button("Finish now") { model.finishWorkout(store: store) }
-                    .buttonStyle(.bordered)
-                    .frame(maxWidth: .infinity)
+                    .buttonStyle(NeonButtonStyle(kind: .ghost, height: 46, fontSize: 14))
             }
-            Button("Discard", role: .destructive) { confirmingDiscard = true }
-                .buttonStyle(.bordered)
-                .frame(maxWidth: .infinity)
+            Button("Discard") { confirmingDiscard = true }
+                .buttonStyle(NeonButtonStyle(kind: .danger, height: 46, fontSize: 14))
         }
-        .padding(.vertical, 12)
+        .padding(.top, 4)
+    }
+
+    private func setLine(reps: Int, isAmrap: Bool, weightKg: Double) -> some View {
+        let repsText = Text(verbatim: "\(reps)\(isAmrap ? "+" : "")").foregroundStyle(Neon.white).font(Neon.mono(20, relativeTo: .title3))
+        let at = Text(verbatim: "@").foregroundStyle(Neon.pink)
+        let weight = Text(verbatim: WeightMath.displayWeightFromKg(weightKg, unit: unit)).foregroundStyle(Neon.white).font(Neon.mono(20, relativeTo: .title3))
+        return Text("\(repsText) REPS \(at) \(weight) \(unit.label.uppercased())")
+            .font(Neon.mono(17, relativeTo: .body))
+            .foregroundStyle(Neon.muted)
+    }
+
+    private func queueRow(_ entry: LocalEntry, index: Int) -> some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.exerciseName.uppercased())
+                    .font(Neon.head(15, .bold, relativeTo: .body))
+                    .tracking(0.8)
+                    .foregroundStyle(Neon.white)
+                    .strikethrough(entry.isSkipped)
+                Text(entryStatusText(entry))
+                    .font(Neon.mono(12, relativeTo: .caption))
+                    .foregroundStyle(Neon.muted)
+            }
+            Spacer()
+            Menu {
+                if entry.isSkipped {
+                    Button("Unskip") { store.unskipExercise(entryIndex: index) }
+                } else if !entry.isDone {
+                    Button("Skip exercise") { store.skipExercise(entryIndex: index) }
+                }
+                Button("Swap exercise…") {
+                    swapName = ""
+                    swapEntryIndex = index
+                }
+                Button("Add a set") { store.addSet(entryIndex: index) }
+            } label: {
+                Text("•••")
+                    .font(Neon.mono(16))
+                    .foregroundStyle(Neon.cyan)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 6)
+                    .contentShape(Rectangle())
+            }
+            .accessibilityLabel("Options for \(entry.exerciseName)")
+        }
+        .padding(.leading, 12)
+        .padding(.trailing, 6)
+        .padding(.vertical, 8)
+        .background(Neon.panel)
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(entry.isDone ? Neon.yellow : entry.sets.contains(where: \.completed) ? Neon.cyan : Neon.line)
+                .frame(width: 3)
+        }
+        .opacity(entry.isSkipped ? 0.5 : 1)
     }
 
     private func entryStatusText(_ entry: LocalEntry) -> String {
         let done = entry.sets.filter(\.completed).count
-        var text = "\(done)/\(entry.sets.count) sets · \(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.sets.first(where: \.isOpen)?.weightKg ?? entry.plannedWeightKg, unit: unit)) \(unit.label)"
-        if entry.isSkipped { text += " · skipped" }
-        if entry.isAdded { text += " · added" }
+        let weight = WeightMath.displayWeightFromKg(entry.sets.first(where: \.isOpen)?.weightKg ?? entry.plannedWeightKg, unit: unit)
+        var text = "\(done)/\(entry.sets.count) · \(entry.plannedReps) @ \(weight) \(unit.label.uppercased())"
+        if entry.isSkipped { text += " · SKIPPED" }
+        if entry.isAdded { text += " · ADDED" }
         return text
     }
 
     private func warmupPanel(_ sets: [WarmupSet]) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text("WARM-UP")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 6) {
+            Kicker(text: "// WARM-UP")
             ForEach(sets, id: \.self) { warmup in
                 HStack {
-                    Text("\(BarbellMath.format(warmup.weight)) \(unit.label) × \(warmup.reps)").bold()
+                    Text("\(BarbellMath.format(warmup.weight)) \(unit.label.uppercased()) × \(warmup.reps)")
+                        .foregroundStyle(Neon.white)
                     Spacer()
-                    Text(BarbellMath.formatPlates(total: warmup.weight, unit: unit))
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
+                    Text(BarbellMath.formatPlates(total: warmup.weight, unit: unit).uppercased())
+                        .foregroundStyle(Neon.cyan)
                 }
+                .font(Neon.mono(14, relativeTo: .callout))
             }
         }
-        .padding(10)
-        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(Neon.ink2)
+        .overlay(Rectangle().strokeBorder(Neon.cyan.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
     }
 
     // MARK: Start panel
 
     private var startPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 14) {
             if let rx = store.cachedPrescription {
-                Text("Next workout: \(rx.workoutName)")
-                    .font(.headline)
-                Text("\(rx.planName) · week \(rx.week)")
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 10) {
+                    Kicker(text: "NEXT UP // WEEK \(rx.week)", color: Neon.cyan)
+                    Text(rx.workoutName.uppercased())
+                        .font(Neon.head(44, .bold, relativeTo: .largeTitle))
+                        .tracking(1.5)
+                        .foregroundStyle(Neon.yellow)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.6)
+                    Text(rx.planName.uppercased())
+                        .font(Neon.mono(12, relativeTo: .caption))
+                        .foregroundStyle(Neon.muted)
 
-                ForEach(rx.entries) { entry in
-                    HStack {
-                        Text(entry.exerciseName)
-                        Spacer()
-                        Text("\(entry.plannedSets)x\(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: unit))")
-                            .foregroundStyle(.secondary)
+                    VStack(spacing: 0) {
+                        ForEach(rx.entries) { entry in
+                            HStack(spacing: 10) {
+                                Text(entry.exerciseName.uppercased())
+                                    .font(Neon.head(15, .semibold, relativeTo: .body))
+                                    .foregroundStyle(Neon.white)
+                                    .lineLimit(1)
+                                Spacer()
+                                Text("\(Text(verbatim: "\(entry.plannedSets)×\(entry.plannedReps)").foregroundStyle(Neon.white)) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: unit))")
+                                    .font(Neon.mono(13, relativeTo: .footnote))
+                                    .foregroundStyle(Neon.muted)
+                                if let tier = entry.tier {
+                                    NeonTag(text: tier, style: tier == "T1" ? .yellow : tier == "T3" ? .pink : .plain)
+                                }
+                            }
+                            .padding(.vertical, 9)
+                            .overlay(alignment: .bottom) { Rectangle().fill(Neon.line).frame(height: 1) }
+                        }
+                    }
+
+                    if let reason = rx.blockedReason {
+                        Text(reason.uppercased())
+                            .font(Neon.mono(12, relativeTo: .footnote))
+                            .foregroundStyle(Neon.pink)
                     }
                 }
-
-                if let reason = rx.blockedReason {
-                    Text(reason).foregroundStyle(.orange)
-                }
+                .neonPanel(edge: Neon.coolEdge)
             } else if store.hasPendingWorkoutUploads {
-                Text("Your next workout will appear once the last one has uploaded.")
-                    .foregroundStyle(.secondary)
+                Text("YOUR NEXT WORKOUT APPEARS ONCE THE LAST ONE HAS UPLOADED.")
+                    .font(Neon.mono(13, relativeTo: .footnote))
+                    .foregroundStyle(Neon.muted)
+                    .neonPanel()
             } else if store.noActivePlan {
-                Text("No active plan. Pick one in Settings → Plans, or build one on web.")
-                    .foregroundStyle(.secondary)
+                Text("NO ACTIVE PLAN // PICK ONE IN SETTINGS → PLANS, OR BUILD ONE ON WEB.")
+                    .font(Neon.mono(13, relativeTo: .footnote))
+                    .foregroundStyle(Neon.muted)
+                    .neonPanel()
             }
 
-            Button("Start workout") {
+            Button("▶ Jack in") {
                 Task { await model.startWorkout(api: api, store: store) }
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(NeonButtonStyle(kind: .primary, height: 64, fontSize: 22))
             .disabled(model.loading || store.cachedPrescription?.blockedReason != nil)
+            .accessibilityLabel("Start workout")
 
             Button("Start empty workout") {
                 emptyWorkoutName = "Workout"
                 showingEmptyWorkoutName = true
             }
-            .buttonStyle(.bordered)
+            .buttonStyle(NeonButtonStyle(kind: .ghost, height: 46, fontSize: 14))
         }
     }
 
     // MARK: Heart rate
 
     private var heartRatePanel: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 10) {
             Group {
                 if recentHeartRateSamples.count >= 2 {
                     Chart(recentHeartRateSamples) { sample in
@@ -597,38 +737,39 @@ struct WorkoutView: View {
                             y: .value("BPM", sample.bpm)
                         )
                         .interpolationMethod(.catmullRom)
-                        .foregroundStyle(.green)
+                        .foregroundStyle(Neon.pink)
                         .lineStyle(StrokeStyle(lineWidth: 2.5))
                     }
                     .chartXAxis(.hidden)
                     .chartYAxis(.hidden)
                     .chartYScale(domain: 70...145)
+                    .shadow(color: Neon.pink.opacity(0.8), radius: 4)
                 } else {
-                    RoundedRectangle(cornerRadius: 8)
-                        .fill(Color.green.opacity(0.08))
-                        .overlay(
-                            Text("Waiting for heart-rate stream…")
-                                .font(.footnote)
-                                .foregroundStyle(.secondary)
-                        )
+                    Text("WAITING FOR HEART-RATE STREAM…")
+                        .font(Neon.mono(11, relativeTo: .caption))
+                        .foregroundStyle(Neon.muted)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: .infinity)
-            .frame(height: 110)
+            .frame(height: 76)
 
-            VStack(alignment: .trailing, spacing: 4) {
+            VStack(alignment: .trailing, spacing: 2) {
+                Kicker(text: "BPM")
                 Text(heartRate.latestBpm.map { "\($0)" } ?? "—")
-                    .font(.system(size: 34, weight: .bold, design: .rounded))
-                    .foregroundStyle(.green)
+                    .font(Neon.head(38, .bold, relativeTo: .largeTitle))
+                    .foregroundStyle(heartRate.latestBpm == nil ? Neon.muted : Neon.pink)
+                    .neonGlow(heartRate.latestBpm == nil ? .clear : Neon.pink, radius: 8)
+                // Lives inside the panel (not floating over the page) so it can't cover other controls.
+                heartRateConnectionDot
+                    .padding(.top, 4)
             }
-            .frame(width: 110, alignment: .trailing)
+            .frame(width: 92, alignment: .trailing)
         }
-        .padding(10)
-        .background(Color.black.opacity(0.34), in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .stroke(Color.green.opacity(0.15), lineWidth: 1)
-        )
+        .padding(.horizontal, 10)
+        .padding(.vertical, 8)
+        .background(Color.black)
+        .overlay(alignment: .leading) { Rectangle().fill(Neon.pink).frame(width: 3) }
     }
 
     private var recentHeartRateSamples: [LiveHeartRateSample] {
@@ -637,7 +778,7 @@ struct WorkoutView: View {
         return heartRate.samples.filter { $0.timestamp >= cutoff }
     }
 
-    // MARK: Timer
+    // MARK: Timer (the clock itself is intentionally unthemed: retro system green / orange / red)
 
     private func timerColor(restTarget: Int) -> Color {
         let elapsed = model.restSeconds(store: store)
@@ -657,15 +798,16 @@ struct WorkoutView: View {
                     RoundedRectangle(cornerRadius: 14)
                         .stroke(color.opacity(0.55), lineWidth: 2)
                 )
-            Text("Rest target \(formatTimer(restTarget))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            Text("REST TARGET \(Text(verbatim: formatTimer(restTarget)).foregroundStyle(Neon.white))")
+                .font(Neon.mono(12, relativeTo: .caption))
+                .tracking(1.6)
+                .foregroundStyle(Neon.muted)
         }
     }
 
     private func outcomeSelector(targetReps: Int, isAmrap: Bool) -> some View {
         HStack(spacing: 10) {
-            Button("Complete") {
+            Button("✓ Complete") {
                 if isAmrap {
                     repsEntryMode = .success
                     repsEntryTarget = targetReps
@@ -676,43 +818,29 @@ struct WorkoutView: View {
                     model.submitCurrentSet(store: store, mode: .success, repsOverride: nil)
                 }
             }
-            .buttonStyle(.borderedProminent)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(NeonButtonStyle(kind: .primary))
 
-            Button("Fail") {
+            Button("✕ Fail") {
                 repsEntryMode = .failed
                 repsEntryTarget = targetReps
                 repsEntryIsAmrap = isAmrap
                 repsEntryValue = "\(max(0, targetReps - 1))"
                 showingRepsEntry = true
             }
-            .buttonStyle(.bordered)
-            .frame(maxWidth: .infinity)
+            .buttonStyle(NeonButtonStyle(kind: .danger))
         }
-        .controlSize(.large)
     }
 
-    private var bluetoothIndicator: some View {
-        ZStack {
-            Circle()
-                .fill(Color.black.opacity(0.55))
-                .overlay(
-                    Circle().stroke(Color.white.opacity(0.22), lineWidth: 1)
-                )
-                .frame(width: 44, height: 44)
-
-            Text("ᛒ")
-                .font(.system(size: 24, weight: .bold, design: .rounded))
-                .foregroundColor(heartRate.isReceivingData ? .blue : .gray)
-
-            if !heartRate.isReceivingData {
-                Rectangle()
-                    .fill(Color.gray)
-                    .frame(width: 24, height: 2)
-                    .rotationEffect(.degrees(-35))
-            }
-        }
-        .accessibilityLabel(heartRate.isReceivingData ? "Bluetooth heart-rate connected" : "Bluetooth heart-rate disconnected")
+    /// Blue when a heart-rate device is connected, red when not.
+    private var heartRateConnectionDot: some View {
+        let connected = heartRate.isHeartRateDeviceConnected
+        let color = connected ? Neon.blue : Neon.red
+        return Circle()
+            .fill(color)
+            .frame(width: 12, height: 12)
+            .shadow(color: color, radius: 6)
+            .accessibilityElement()
+            .accessibilityLabel(connected ? "Heart-rate monitor connected" : "No heart-rate monitor connected")
     }
 
     private func formatTimer(_ value: Int) -> String {
@@ -809,20 +937,26 @@ private struct RepsEntrySheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Text("Enter number of completed reps")
-                        .font(.footnote)
-                        .foregroundStyle(.secondary)
                     TextField("Reps", text: $value)
                         .keyboardType(.numberPad)
+                        .font(Neon.head(40, .bold, relativeTo: .largeTitle))
+                        .foregroundStyle(mode == .failed ? Neon.pink : Neon.yellow)
+                } header: {
+                    NeonSectionHeader(text: mode == .failed ? "Reps completed" : "Total reps")
+                } footer: {
+                    NeonFootnote(text: mode == .failed ? "TARGET WAS \(target). A FAILED SET IS FEWER." : "AT LEAST \(target)\(isAmrap ? " (AMRAP)" : "").")
                 }
+                .neonRows()
             }
-            .navigationTitle("Reps")
+            .neonForm()
+            .navigationTitle(mode == .failed ? "FAILED SET" : "REPS")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel", action: onCancel)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: onSubmit)
+                    Button("Save", action: onSubmit).bold()
                 }
             }
         }
@@ -848,19 +982,32 @@ private struct WeightEntrySheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("Weight (\(unit.label))", text: $value)
-                        .keyboardType(.decimalPad)
+                    HStack(alignment: .firstTextBaseline) {
+                        TextField("Weight", text: $value)
+                            .keyboardType(.decimalPad)
+                            .font(Neon.head(40, .bold, relativeTo: .largeTitle))
+                            .foregroundStyle(Neon.yellow)
+                        Text(unit.label.uppercased())
+                            .font(Neon.mono(18))
+                            .foregroundStyle(Neon.muted)
+                    }
+                } header: {
+                    NeonSectionHeader(text: title)
                 } footer: {
-                    Text("Applies to the remaining sets of \(title).")
+                    NeonFootnote(text: "APPLIES TO THE REMAINING SETS.")
                 }
+                .neonRows()
             }
-            .navigationTitle("Weight (\(unit.label))")
+            .neonForm()
+            .navigationTitle("CHANGE WEIGHT")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         if let weight = Double(value.replacingOccurrences(of: ",", with: ".")), weight >= 0 { onSave(weight) }
                     }
+                    .bold()
                 }
             }
         }
@@ -886,23 +1033,48 @@ private struct AddExerciseSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Exercise") {
+                Section {
                     TextField("Name", text: $name)
                         .autocorrectionDisabled()
+                        .font(Neon.head(20, .bold))
                     ForEach(matches, id: \.self) { match in
-                        Button(match) { name = match }
+                        Button(match.uppercased()) { name = match }
+                            .font(Neon.mono(14))
+                            .foregroundStyle(Neon.cyan)
                     }
+                } header: {
+                    NeonSectionHeader(text: "Exercise")
                 }
+                .neonRows()
+
                 Section {
-                    Stepper("Sets: \(sets)", value: $sets, in: 1...20)
-                    Stepper("Reps: \(reps)", value: $reps, in: 1...100)
-                    TextField("Weight (\(unit.label))", text: $weight)
-                        .keyboardType(.decimalPad)
+                    Stepper(value: $sets, in: 1...20) {
+                        Text("SETS  \(Text(verbatim: "\(sets)").foregroundStyle(Neon.yellow))").font(Neon.mono(16))
+                    }
+                    Stepper(value: $reps, in: 1...100) {
+                        Text("REPS  \(Text(verbatim: "\(reps)").foregroundStyle(Neon.yellow))").font(Neon.mono(16))
+                    }
+                    HStack {
+                        Text("WEIGHT").font(Neon.mono(16))
+                        Spacer()
+                        TextField("0", text: $weight)
+                            .keyboardType(.decimalPad)
+                            .multilineTextAlignment(.trailing)
+                            .font(Neon.mono(18))
+                            .foregroundStyle(Neon.yellow)
+                            .frame(width: 90)
+                        Text(unit.label.uppercased()).font(Neon.mono(14)).foregroundStyle(Neon.muted)
+                    }
+                } header: {
+                    NeonSectionHeader(text: "Prescription")
                 } footer: {
-                    Text("Added exercises are logged but aren't part of the plan's progression.")
+                    NeonFootnote(text: "ADDED EXERCISES ARE LOGGED BUT AREN'T PART OF THE PLAN'S PROGRESSION.")
                 }
+                .neonRows()
             }
-            .navigationTitle("Add exercise")
+            .neonForm()
+            .navigationTitle("ADD EXERCISE")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
                 ToolbarItem(placement: .confirmationAction) {
@@ -910,6 +1082,7 @@ private struct AddExerciseSheet: View {
                         let value = Double(weight.replacingOccurrences(of: ",", with: ".")) ?? 0
                         onAdd(name, sets, reps, max(0, value))
                     }
+                    .bold()
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
             }

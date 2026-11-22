@@ -54,48 +54,55 @@ struct PlansView: View {
     var body: some View {
         List {
             if !model.errorMessage.isEmpty {
-                Section { Text(model.errorMessage).foregroundStyle(.red) }
+                Section { Text(model.errorMessage).font(Neon.mono(13)).foregroundStyle(Neon.red) }
+                .neonRows()
             }
             if !model.infoMessage.isEmpty {
-                Section { Text(model.infoMessage).foregroundStyle(.green) }
+                Section { Text(model.infoMessage).font(Neon.mono(13)).foregroundStyle(Neon.cyan) }
+                .neonRows()
             }
             if store.activeWorkout != nil {
                 Section {
                     Text("Finish or discard the workout in progress before switching plans.")
                         .foregroundStyle(.orange)
                 }
+                .neonRows()
             }
 
             Section {
                 if model.activePlans.isEmpty {
                     Text("No active plan. Activate one below.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Neon.muted)
                 }
                 ForEach(model.activePlans) { plan in
                     row(plan)
                 }
-            } header: {
-                Text("Active")
-            } footer: {
-                Text("Only one plan can be active. Switching plans keeps each plan's progress, so you can switch back and resume.")
+            } header: { NeonSectionHeader(text: "Active") } footer: {
+                NeonFootnote(text: "Only one plan can be active. Switching plans keeps each plan's progress, so you can switch back and resume.")
             }
+            .neonRows()
 
             if !model.otherPlans.isEmpty {
-                Section("Inactive") {
+                Section {
                     ForEach(model.otherPlans) { plan in
                         row(plan)
                     }
+                } header: {
+                    NeonSectionHeader(text: "Inactive")
                 }
+                .neonRows()
             }
 
             if model.plans.isEmpty && !model.loading && model.errorMessage.isEmpty {
                 Section {
                     Text("No plans yet. Create plans in the web app.")
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(Neon.muted)
                 }
+                .neonRows()
             }
         }
-        .navigationTitle("Plans")
+        .neonForm()
+        .navigationTitle("PLANS")
         .overlay {
             if model.loading && model.plans.isEmpty { ProgressView() }
         }
@@ -124,12 +131,15 @@ struct PlansView: View {
         HStack(alignment: .center, spacing: 12) {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
-                    Text(plan.name).font(.headline)
+                    Text(plan.name.uppercased())
+                        .font(Neon.head(16, .bold, relativeTo: .headline))
+                        .tracking(0.8)
+                        .foregroundStyle(Neon.white)
                     statusBadge(plan)
                 }
-                Text(details(plan))
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                Text(details(plan).uppercased())
+                    .font(Neon.mono(11, relativeTo: .caption))
+                    .foregroundStyle(Neon.muted)
             }
 
             Spacer()
@@ -138,7 +148,8 @@ struct PlansView: View {
                 Button("Deactivate") {
                     Task { await model.deactivate(plan, using: api) }
                 }
-                .buttonStyle(.bordered)
+                .buttonStyle(NeonButtonStyle(kind: .ghost, height: 34, fontSize: 12))
+                .fixedSize()
             } else {
                 Button(plan.isCompleted ? "Restart" : "Activate") {
                     if plan.isCompleted {
@@ -147,24 +158,18 @@ struct PlansView: View {
                         Task { await model.activate(plan, using: api) }
                     }
                 }
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(NeonButtonStyle(kind: .primary, height: 34, fontSize: 12))
+                .fixedSize()
             }
         }
         .disabled(model.loading || store.activeWorkout != nil)
         .padding(.vertical, 2)
     }
 
-    @ViewBuilder
     private func statusBadge(_ plan: PlanSummary) -> some View {
-        let (label, color): (String, Color) = plan.isRunning
-            ? ("Active", .green)
-            : plan.isCompleted ? ("Completed", .blue) : ("Inactive", .gray)
-        Text(label)
-            .font(.caption2.weight(.semibold))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 2)
-            .foregroundStyle(color)
-            .overlay(Capsule().stroke(color, lineWidth: 1))
+        plan.isRunning
+            ? NeonTag(text: "Active", style: .yellow)
+            : plan.isCompleted ? NeonTag(text: "Completed", style: .cyan) : NeonTag(text: "Inactive")
     }
 
     private func details(_ plan: PlanSummary) -> String {

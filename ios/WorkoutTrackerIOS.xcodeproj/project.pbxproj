@@ -37,6 +37,16 @@
 		A00100010001000100010040 /* WorkoutActivityAttributes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010016 /* WorkoutActivityAttributes.swift */; };
 		A00100010001000100010041 /* WorkoutLiveActivity.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010040 /* WorkoutLiveActivity.swift */; };
 		A00100010001000100010042 /* WorkoutLiveActivity.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = A00200010001000100010042 /* WorkoutLiveActivity.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		A00100010001000100010018 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010018 /* Theme.swift */; };
+		A00100010001000100010043 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010018 /* Theme.swift */; };
+		A00100010001000100010050 /* ChakraPetch-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010050 /* ChakraPetch-Medium.ttf */; };
+		A00100010001000100010060 /* ChakraPetch-Medium.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010050 /* ChakraPetch-Medium.ttf */; };
+		A00100010001000100010051 /* ChakraPetch-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010051 /* ChakraPetch-SemiBold.ttf */; };
+		A00100010001000100010061 /* ChakraPetch-SemiBold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010051 /* ChakraPetch-SemiBold.ttf */; };
+		A00100010001000100010052 /* ChakraPetch-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010052 /* ChakraPetch-Bold.ttf */; };
+		A00100010001000100010062 /* ChakraPetch-Bold.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010052 /* ChakraPetch-Bold.ttf */; };
+		A00100010001000100010053 /* ShareTechMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010053 /* ShareTechMono-Regular.ttf */; };
+		A00100010001000100010063 /* ShareTechMono-Regular.ttf in Resources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010053 /* ShareTechMono-Regular.ttf */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -104,6 +114,11 @@
 		A00200010001000100010040 /* WorkoutLiveActivity.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorkoutLiveActivity.swift; sourceTree = "<group>"; };
 		A00200010001000100010041 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A00200010001000100010042 /* WorkoutLiveActivity.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WorkoutLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00200010001000100010018 /* Theme.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Theme.swift; sourceTree = "<group>"; };
+		A00200010001000100010050 /* ChakraPetch-Medium.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = ChakraPetch-Medium.ttf; sourceTree = "<group>"; };
+		A00200010001000100010051 /* ChakraPetch-SemiBold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = ChakraPetch-SemiBold.ttf; sourceTree = "<group>"; };
+		A00200010001000100010052 /* ChakraPetch-Bold.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = ChakraPetch-Bold.ttf; sourceTree = "<group>"; };
+		A00200010001000100010053 /* ShareTechMono-Regular.ttf */ = {isa = PBXFileReference; lastKnownFileType = file; path = ShareTechMono-Regular.ttf; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -144,6 +159,7 @@ A00400010001000100010003 /* Products */,
 		A00400010001000100010002 /* WorkoutTrackerIOS */ = {
 			isa = PBXGroup;
 			children = (
+				A0040001000100010001000F /* Fonts */,
 				A00200010001000100010001 /* WorkoutTrackerIOSApp.swift */,
 				A00400010001000100010004 /* Core */,
 				A00400010001000100010005 /* Models */,
@@ -204,6 +220,7 @@ A00400010001000100010003 /* Products */,
 		A00400010001000100010007 /* Shared */ = {
 			isa = PBXGroup;
 			children = (
+				A00200010001000100010018 /* Theme.swift */,
 				A00200010001000100010016 /* WorkoutActivityAttributes.swift */,
 				A00200010001000100010014 /* BarbellMath.swift */,
 				A00200010001000100010007 /* Formatters.swift */,
@@ -272,6 +289,17 @@ A00400010001000100010003 /* Products */,
 				A00200010001000100010041 /* Info.plist */,
 			);
 			path = WorkoutLiveActivity;
+			sourceTree = "<group>";
+		};
+		A0040001000100010001000F /* Fonts */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010050 /* ChakraPetch-Medium.ttf */,
+				A00200010001000100010051 /* ChakraPetch-SemiBold.ttf */,
+				A00200010001000100010052 /* ChakraPetch-Bold.ttf */,
+				A00200010001000100010053 /* ShareTechMono-Regular.ttf */,
+			);
+			path = Fonts;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -379,6 +407,10 @@ A00400010001000100010003 /* Products */,
 			buildActionMask = 2147483647;
 			files = (
 				A0010001000100010001000D /* Assets.xcassets in Resources */,
+				A00100010001000100010050 /* ChakraPetch-Medium.ttf in Resources */,
+				A00100010001000100010051 /* ChakraPetch-SemiBold.ttf in Resources */,
+				A00100010001000100010052 /* ChakraPetch-Bold.ttf in Resources */,
+				A00100010001000100010053 /* ShareTechMono-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -393,6 +425,10 @@ A00400010001000100010003 /* Products */,
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				A00100010001000100010060 /* ChakraPetch-Medium.ttf in Resources */,
+				A00100010001000100010061 /* ChakraPetch-SemiBold.ttf in Resources */,
+				A00100010001000100010062 /* ChakraPetch-Bold.ttf in Resources */,
+				A00100010001000100010063 /* ShareTechMono-Regular.ttf in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -417,6 +453,7 @@ A00400010001000100010003 /* Products */,
 				A00100010001000100010015 /* SignInView.swift in Sources */,
 				A00100010001000100010016 /* WorkoutActivityAttributes.swift in Sources */,
 				A00100010001000100010017 /* LiveActivityController.swift in Sources */,
+				A00100010001000100010018 /* Theme.swift in Sources */,
 				A00100010001000100010010 /* PlansView.swift in Sources */,
 				A00100010001000100010014 /* BarbellMath.swift in Sources */,
 				A00100010001000100010013 /* RestTimerNotifier.swift in Sources */,
@@ -445,6 +482,7 @@ A00400010001000100010003 /* Products */,
 			files = (
 				A00100010001000100010041 /* WorkoutLiveActivity.swift in Sources */,
 				A00100010001000100010040 /* WorkoutActivityAttributes.swift in Sources */,
+				A00100010001000100010043 /* Theme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -483,7 +521,7 @@ A00400010001000100010003 /* Products */,
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
@@ -510,7 +548,7 @@ A00400010001000100010003 /* Products */,
 				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				GCC_WARN_UNUSED_VARIABLE = YES;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MTL_ENABLE_DEBUG_INFO = NO;
 				SDKROOT = iphoneos;
 				SWIFT_OPTIMIZATION_LEVEL = "-O";
@@ -610,7 +648,7 @@ A00400010001000100010003 /* Products */,
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WorkoutLiveActivity/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",
@@ -636,7 +674,7 @@ A00400010001000100010003 /* Products */,
 				DEVELOPMENT_TEAM = "";
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = WorkoutLiveActivity/Info.plist;
-				IPHONEOS_DEPLOYMENT_TARGET = 16.2;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				LD_RUNPATH_SEARCH_PATHS = (
 					"$(inherited)",
 					"@executable_path/Frameworks",

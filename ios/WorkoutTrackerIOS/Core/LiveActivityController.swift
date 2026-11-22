@@ -1,7 +1,5 @@
-import Foundation
-#if canImport(ActivityKit)
 import ActivityKit
-#endif
+import Foundation
 
 /// Mirrors the on-device workout onto a Live Activity (lock screen + Dynamic Island).
 ///
@@ -50,8 +48,6 @@ final class LiveActivityController {
     }
 
     func sync(workout: LocalWorkout?, unit: WeightUnit) {
-        #if canImport(ActivityKit)
-        guard #available(iOS 16.2, *) else { return }
         guard let workout else {
             lastState = nil
             lastWorkoutId = nil
@@ -63,11 +59,8 @@ final class LiveActivityController {
         lastState = state
         lastWorkoutId = workout.clientId
         apply(state, workoutName: workout.workoutName)
-        #endif
     }
 
-    #if canImport(ActivityKit)
-    @available(iOS 16.2, *)
     private func apply(_ state: WorkoutActivityAttributes.ContentState, workoutName: String) {
         // A rest that's over is shown as stale ("Rest's up") by the widget.
         let content = ActivityContent(state: state, staleDate: state.restEndsAt)
@@ -94,11 +87,9 @@ final class LiveActivityController {
         }
     }
 
-    @available(iOS 16.2, *)
     private func endAll() {
         for activity in Activity<WorkoutActivityAttributes>.activities {
             Task { await activity.end(nil, dismissalPolicy: .immediate) }
         }
     }
-    #endif
 }

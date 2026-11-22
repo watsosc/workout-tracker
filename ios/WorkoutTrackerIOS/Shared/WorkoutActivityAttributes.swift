@@ -1,10 +1,8 @@
-import Foundation
-#if canImport(ActivityKit)
 import ActivityKit
-#endif
+import Foundation
 
 /// Live Activity data. Compiled into both the app and the WorkoutLiveActivity widget extension.
-struct WorkoutActivityAttributes {
+struct WorkoutActivityAttributes: ActivityAttributes {
     struct ContentState: Codable, Hashable {
         /// Exercise of the next set, or a summary when every set is done.
         var exerciseName: String
@@ -21,8 +19,3 @@ struct WorkoutActivityAttributes {
 
     var workoutName: String
 }
-
-#if canImport(ActivityKit)
-@available(iOS 16.1, *)
-extension WorkoutActivityAttributes: ActivityAttributes {}
-#endif

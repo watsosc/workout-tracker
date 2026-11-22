@@ -55,63 +55,70 @@ struct AnalyticsView: View {
                 }
 
                 if !model.errorMessage.isEmpty {
-                    Text(model.errorMessage).foregroundStyle(.red)
+                    Text(model.errorMessage).font(Neon.mono(13)).foregroundStyle(Neon.red)
                 }
 
-                Section("Total volume") {
+                Section {
                     if model.history.isEmpty {
                         Text("No completed workouts yet.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Neon.muted)
                     } else {
                         Chart(model.history) { item in
                             LineMark(
                                 x: .value("Date", Formatters.shortDate(item.finishedAt)),
                                 y: .value("Volume", WeightMath.convertKgToUnit(item.totalVolumeKg, unit: settings.weightUnit))
                             )
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Neon.cyan)
 
                             PointMark(
                                 x: .value("Date", Formatters.shortDate(item.finishedAt)),
                                 y: .value("Volume", WeightMath.convertKgToUnit(item.totalVolumeKg, unit: settings.weightUnit))
                             )
-                            .foregroundStyle(.blue)
+                            .foregroundStyle(Neon.cyan)
                         }
                         .frame(height: 220)
                     }
+                } header: {
+                    NeonSectionHeader(text: "Total volume")
                 }
+                .neonRows()
 
-                Section("Exercise trends") {
+                Section {
                     Picker("Exercise", selection: $model.selectedExerciseId) {
                         ForEach(model.baselines) { baseline in
                             Text(baseline.exerciseName).tag(Optional(baseline.exerciseId))
                         }
                     }
-                    .onChange(of: model.selectedExerciseId) { _ in
+                    .onChange(of: model.selectedExerciseId) {
                         Task { await model.loadProgress(using: api) }
                     }
 
                     if model.progress.isEmpty {
                         Text("No progress points yet.")
-                            .foregroundStyle(.secondary)
+                            .foregroundStyle(Neon.muted)
                     } else {
                         Chart(model.progress) { point in
                             LineMark(
                                 x: .value("Date", Formatters.shortDate(point.date)),
                                 y: .value("Top Set", WeightMath.convertKgToUnit(point.topWeightKg, unit: settings.weightUnit))
                             )
-                            .foregroundStyle(.green)
+                            .foregroundStyle(Neon.yellow)
 
                             LineMark(
                                 x: .value("Date", Formatters.shortDate(point.date)),
                                 y: .value("Estimated 1RM", WeightMath.convertKgToUnit(point.estimated1rmKg, unit: settings.weightUnit))
                             )
-                            .foregroundStyle(.orange)
+                            .foregroundStyle(Neon.pink)
                         }
                         .frame(height: 220)
                     }
+                } header: {
+                    NeonSectionHeader(text: "Exercise trends")
                 }
+                .neonRows()
             }
-            .navigationTitle("Analytics")
+            .neonForm()
+            .navigationTitle("ANALYTICS")
             .task { await model.load(using: api) }
         }
     }

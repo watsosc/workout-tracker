@@ -72,86 +72,65 @@ struct HistoryView: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if model.loading { ProgressView() }
-
-                if !model.errorMessage.isEmpty {
-                    Text(model.errorMessage).foregroundStyle(.red)
-                }
-                if !model.infoMessage.isEmpty {
-                    Text(model.infoMessage).foregroundStyle(.green)
-                }
-
-                let pendingWorkouts = store.outbox.filter {
-                    if case .logWorkout = $0.kind { return true } else { return false }
-                }
-                if !pendingWorkouts.isEmpty {
-                    Section("Waiting to upload") {
-                        ForEach(pendingWorkouts) { item in
-                            Label(item.title, systemImage: "icloud.and.arrow.up")
-                        }
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 0) {
+                        Kicker(text: "LOG // \(model.history.count) SESSIONS", color: Neon.pink)
+                        Text("HISTORY")
+                            .font(Neon.head(44, .bold, relativeTo: .largeTitle))
+                            .tracking(2)
+                            .foregroundStyle(Neon.yellow)
                     }
-                }
+                    .padding(.top, 8)
 
-                if !model.loading && model.history.isEmpty {
-                    Section {
-                        Text("No completed workouts to show")
-                            .foregroundStyle(.secondary)
+                    if model.loading { ProgressView().tint(Neon.yellow) }
+
+                    if !model.errorMessage.isEmpty {
+                        Text(model.errorMessage.uppercased())
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(Neon.red)
                     }
-                }
+                    if !model.infoMessage.isEmpty {
+                        Text(model.infoMessage.uppercased())
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(Neon.cyan)
+                    }
 
-                ForEach(model.history) { item in
-                    Section("#\(item.sessionId) • \(item.planWorkoutName)") {
-                        Text("Finished: \(Formatters.dateTime(item.finishedAt))")
-                        Text("Sets: \(item.completedSets)/\(item.totalSets)")
-                        Text("Volume: \(WeightMath.displayWeightFromKg(item.totalVolumeKg, unit: settings.weightUnit)) \(settings.weightUnit.label)-reps")
-                        Text("Duration: \(Formatters.duration(item.totalDurationSeconds))")
-
-                        if item.heartRateSampleCount > 1,
-                           let samples = model.heartRateBySession[item.sessionId], !samples.isEmpty {
-                            Chart(samples) { sample in
-                                LineMark(
-                                    x: .value("Time", sample.recordedAt),
-                                    y: .value("BPM", sample.bpm)
-                                )
-                                .foregroundStyle(.pink)
-                            }
-                            .frame(height: 160)
-                        }
-
-                        if item.stravaExportStatus == .sent, let url = item.stravaActivityUrl, let link = URL(string: url) {
-                            Link("View on Strava", destination: link)
-                        } else if model.stravaConnection?.connected == true {
-                            Button(item.stravaExportStatus == .failed ? "Retry Strava" : "Send to Strava") {
-                                Task { await model.sendToStrava(item: item, api: api) }
+                    let pendingWorkouts = store.outbox.filter {
+                        if case .logWorkout = $0.kind { return true } else { return false }
+                    }
+                    if !pendingWorkouts.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Kicker(text: "// WAITING TO UPLOAD", color: Neon.cyan)
+                            ForEach(pendingWorkouts) { item in
+                                Text("⇡ \(item.title.uppercased())")
+                                    .font(Neon.mono(13, relativeTo: .footnote))
+                                    .foregroundStyle(Neon.cyan)
                             }
                         }
+                        .padding(12)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Neon.cyan.opacity(0.05))
+                        .overlay(Rectangle().strokeBorder(Neon.cyan.opacity(0.45), lineWidth: 1))
+                    }
 
-                        ForEach(item.personalRecords) { pr in
-                            Text("🏆 \(pr.describe(unit: settings.weightUnit))")
-                                .font(.footnote)
-                                .foregroundStyle(.orange)
-                        }
+                    if !model.loading && model.history.isEmpty {
+                        Text("NO COMPLETED WORKOUTS YET.")
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(Neon.muted)
+                            .neonPanel()
+                    }
 
-                        ForEach(item.exercises) { exercise in
-                            HStack {
-                                Text(exercise.exerciseName)
-                                Spacer()
-                                Text("\(exercise.completedSets)x\(exercise.totalReps) • \(WeightMath.displayWeightFromKg(exercise.topWeightKg, unit: settings.weightUnit))")
-                                    .foregroundStyle(.secondary)
-                            }
-                        }
-
-                        HStack {
-                            Button("Edit") { editingSessionId = item.sessionId }
-                            Spacer()
-                            Button("Delete", role: .destructive) { deleting = item }
-                        }
-                        .buttonStyle(.borderless)
+                    ForEach(model.history) { item in
+                        historyCard(item)
                     }
                 }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 24)
             }
-            .navigationTitle("History")
+            .scrollIndicators(.hidden)
+            .background(NeonBackground())
+            .toolbar(.hidden, for: .navigationBar)
             .task { await model.load(using: api) }
             .refreshable { await model.load(using: api) }
             .sheet(item: Binding(
@@ -176,10 +155,109 @@ struct HistoryView: View {
             } message: { _ in
                 Text("If it's your most recent workout, its progression is undone too. This can't be undone.")
             }
-            .onChange(of: store.outbox.count) { _ in
+            .onChange(of: store.outbox.count) {
                 Task { await model.load(using: api) }
             }
         }
+    }
+
+    private var unit: WeightUnit { settings.weightUnit }
+
+    private func historyCard(_ item: WorkoutHistoryItem) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(item.planWorkoutName.uppercased())
+                        .font(Neon.head(22, .bold, relativeTo: .title2))
+                        .tracking(1.2)
+                        .foregroundStyle(Neon.white)
+                    Text(subtitle(item))
+                        .font(Neon.mono(11, relativeTo: .caption))
+                        .tracking(1)
+                        .foregroundStyle(Neon.muted)
+                }
+                Spacer()
+                if !item.personalRecords.isEmpty {
+                    NeonTag(text: "🏆 \(Set(item.personalRecords.map(\.exerciseName)).count) PR", style: .pink)
+                }
+            }
+
+            if item.heartRateSampleCount > 1,
+               let samples = model.heartRateBySession[item.sessionId], !samples.isEmpty {
+                Chart(samples) { sample in
+                    LineMark(
+                        x: .value("Time", sample.recordedAt),
+                        y: .value("BPM", sample.bpm)
+                    )
+                    .foregroundStyle(Neon.pink)
+                    .interpolationMethod(.catmullRom)
+                }
+                .chartXAxis(.hidden)
+                .chartYAxis(.hidden)
+                .chartYScale(domain: .automatic(includesZero: false))
+                .frame(height: 56)
+                .padding(.vertical, 4)
+                .background(Color.black)
+            }
+
+            VStack(spacing: 0) {
+                ForEach(item.exercises) { exercise in
+                    let isPR = item.personalRecords.contains { $0.exerciseName == exercise.exerciseName }
+                    HStack {
+                        Text(exercise.exerciseName.uppercased())
+                            .font(Neon.head(14, .semibold, relativeTo: .body))
+                            .foregroundStyle(Neon.white)
+                        if isPR { Text("🏆").font(.caption) }
+                        Spacer()
+                        Text("\(exercise.completedSets) × \(exercise.totalReps) · \(WeightMath.displayWeightFromKg(exercise.topWeightKg, unit: unit))")
+                            .font(Neon.mono(13, relativeTo: .footnote))
+                            .foregroundStyle(isPR ? Neon.pink : Neon.muted)
+                    }
+                    .padding(.vertical, 7)
+                    .overlay(alignment: .bottom) { Rectangle().fill(Neon.line).frame(height: 1) }
+                }
+            }
+
+            ForEach(item.personalRecords) { pr in
+                Text("🏆 \(pr.describe(unit: unit).uppercased())")
+                    .font(Neon.mono(12, relativeTo: .caption))
+                    .foregroundStyle(Neon.pink)
+            }
+
+            HStack(spacing: 18) {
+                Button("Edit") { editingSessionId = item.sessionId }
+                    .buttonStyle(NeonLinkStyle())
+                if item.stravaExportStatus == .sent, let url = item.stravaActivityUrl, let link = URL(string: url) {
+                    Link("↗ Strava", destination: link)
+                        .font(Neon.mono(13, relativeTo: .footnote))
+                        .tracking(1.2)
+                        .underline()
+                        .foregroundStyle(Neon.cyan)
+                } else if model.stravaConnection?.connected == true {
+                    Button(item.stravaExportStatus == .failed ? "Retry Strava" : "↗ Send to Strava") {
+                        Task { await model.sendToStrava(item: item, api: api) }
+                    }
+                    .buttonStyle(NeonLinkStyle(color: Neon.cyan))
+                }
+                Spacer()
+                Button("Delete") { deleting = item }
+                    .buttonStyle(NeonLinkStyle(color: Neon.red))
+            }
+            .padding(.top, 2)
+        }
+        .neonPanel(edge: item.personalRecords.isEmpty ? AnyShapeStyle(Neon.line) : AnyShapeStyle(Neon.coolEdge))
+        .opacity(item.planRunId == nil ? 0.85 : 1)
+    }
+
+    private func subtitle(_ item: WorkoutHistoryItem) -> String {
+        var parts: [String] = []
+        if let date = ISO8601.parse(item.finishedAt) {
+            parts.append(date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated)).uppercased())
+        }
+        if let seconds = item.totalDurationSeconds { parts.append("\(seconds / 60) MIN") }
+        parts.append("\(item.completedSets)/\(item.totalSets) SETS")
+        if item.planRunId == nil { parts.append("OFF-PLAN") }
+        return parts.joined(separator: " · ")
     }
 }
 
@@ -212,12 +290,12 @@ private struct EditWorkoutSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if loading { ProgressView() }
+                if loading { ProgressView().tint(Neon.yellow).neonRows() }
                 if !errorMessage.isEmpty {
-                    Text(errorMessage).foregroundStyle(.red)
+                    Text(errorMessage.uppercased()).font(Neon.mono(13)).foregroundStyle(Neon.red).neonRows()
                 }
                 ForEach(groupedNames, id: \.self) { name in
-                    Section(name) {
+                    Section {
                         ForEach($rows.filter { $0.wrappedValue.exerciseName == name }) { $row in
                             HStack {
                                 Toggle("Set \(row.setIndex)", isOn: $row.completed)
@@ -232,13 +310,19 @@ private struct EditWorkoutSheet: View {
                                     .keyboardType(.decimalPad)
                                     .multilineTextAlignment(.trailing)
                                     .frame(width: 70)
-                                Text(unit.label).foregroundStyle(.secondary)
+                                Text(unit.label.uppercased()).font(Neon.mono(13)).foregroundStyle(Neon.muted)
                             }
+                            .font(Neon.mono(16))
                         }
+                    } header: {
+                        NeonSectionHeader(text: name)
                     }
+                    .neonRows()
                 }
             }
-            .navigationTitle("Edit workout")
+            .neonForm()
+            .navigationTitle("EDIT WORKOUT")
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
                 ToolbarItem(placement: .confirmationAction) {
