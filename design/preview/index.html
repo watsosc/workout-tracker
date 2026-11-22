@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Workout Tracker · Design preview · Edgerunners</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link
+		href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Share+Tech+Mono&display=swap"
+		rel="stylesheet"
+	/>
+	<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+	<!--
+		Throwaway design preview for the iOS app. Not part of the app build.
+		Phones are drawn at iPhone 17 point size (402 × 874). The rest clock is an exact
+		replica of SegmentedDigitalClock in WorkoutView.swift and must not be restyled.
+	-->
+	<header class="page-head">
+		<div>
+			<p class="kicker">// DESIGN PREVIEW · iOS</p>
+			<h1 class="glitch" data-text="EDGERUNNER">EDGERUNNER</h1>
+			<p class="subtitle">Inky blacks, neon yellow / magenta / cyan, hard edges. The rest clock is untouched.</p>
+		</div>
+		<form class="controls" id="controls">
+			<label>
+				<span>Rest elapsed</span>
+				<input type="range" id="rest" min="0" max="240" value="94" />
+				<output id="rest-out">01:34</output>
+			</label>
+			<label class="check"><input type="checkbox" id="tick" checked /> <span>Clock running</span></label>
+			<label class="check"><input type="checkbox" id="hr" checked /> <span>HR monitor connected</span></label>
+			<label class="check"><input type="checkbox" id="kg" /> <span>Show kg</span></label>
+		</form>
+	</header>
+
+	<main class="board">
+		<!-- 1. Mid-workout -->
+		<figure class="shot">
+			<div class="phone" data-tab="workout">
+				<div class="screen">
+					<div class="nav">
+						<span class="nav-kicker">GZCLP // WEEK 03</span>
+						<div class="nav-row">
+							<h2 class="nav-title">DAY A</h2>
+							<button class="chip"><span class="chip-icon">↶</span> UNDO SET</button>
+						</div>
+					</div>
+
+					<section class="cut card hero-card">
+						<div class="cut-in">
+							<div class="clock-wrap">
+								<div class="clock" data-clock="rest"></div>
+								<p class="rest-caption"><span class="mono">REST TARGET</span> <b class="mono">03:00</b></p>
+							</div>
+
+							<div class="set-head">
+								<div class="set-tags">
+									<span class="tag tag-yellow">T1</span>
+									<span class="tag">SET 03/05</span>
+									<span class="tag tag-pink">AMRAP ON 5</span>
+								</div>
+								<h3 class="exercise glitch-soft" data-text="BACK SQUAT">BACK SQUAT</h3>
+								<p class="set-line"><b>3</b> REPS <span class="at">@</span> <b data-w="102.1"></b> <span data-u></span></p>
+								<div class="set-tools">
+									<button class="link">CHANGE WEIGHT</button>
+									<span class="plates" data-plates="102.1"></span>
+								</div>
+							</div>
+
+							<div class="hr-panel">
+								<svg class="hr-line" viewBox="0 0 220 70" preserveAspectRatio="none"><path id="hr-path" d="" /></svg>
+								<div class="hr-read">
+									<span class="mono hr-label">BPM</span>
+									<span class="hr-bpm" id="hr-bpm">128</span>
+									<span class="hr-dot" data-hr-dot></span>
+								</div>
+							</div>
+
+							<div class="actions">
+								<button class="btn btn-yes cut-btn"><span>✓ COMPLETE</span></button>
+								<button class="btn btn-no cut-btn"><span>✕ FAIL</span></button>
+							</div>
+						</div>
+					</section>
+
+					<p class="section-label">// QUEUE</p>
+					<ul class="queue">
+						<li class="q done">
+							<div><b>BACK SQUAT</b><span class="mono">2/5 · 3 @ <i data-w="102.1"></i> <i data-u></i></span></div>
+							<button class="more">•••</button>
+						</li>
+						<li class="q">
+							<div><b>BENCH PRESS</b><span class="mono">0/3 · 10 @ <i data-w="61.2"></i> <i data-u></i></span></div>
+							<button class="more">•••</button>
+						</li>
+						<li class="q skipped">
+							<div><b>LAT PULLDOWN</b><span class="mono">SKIPPED</span></div>
+							<button class="more">•••</button>
+						</li>
+					</ul>
+					<button class="add-row">+ ADD EXERCISE</button>
+				</div>
+			</div>
+			<figcaption>Mid-workout · resting before set 3</figcaption>
+		</figure>
+
+		<!-- 2. First set with warm-up -->
+		<figure class="shot">
+			<div class="phone" data-tab="workout">
+				<div class="screen">
+					<div class="nav">
+						<span class="nav-kicker">GZCLP // WEEK 03</span>
+						<div class="nav-row"><h2 class="nav-title">DAY A</h2></div>
+					</div>
+
+					<section class="cut card hero-card">
+						<div class="cut-in">
+							<div class="clock-wrap">
+								<div class="clock" data-clock="fresh"></div>
+								<p class="rest-caption"><span class="mono">REST TARGET</span> <b class="mono">03:00</b></p>
+							</div>
+							<div class="set-head">
+								<div class="set-tags">
+									<span class="tag tag-yellow">T1</span>
+									<span class="tag">SET 01/05</span>
+								</div>
+								<h3 class="exercise">BACK SQUAT</h3>
+								<p class="set-line"><b>3</b> REPS <span class="at">@</span> <b data-w="102.1"></b> <span data-u></span></p>
+								<div class="set-tools">
+									<button class="link">CHANGE WEIGHT</button>
+									<span class="plates" data-plates="102.1"></span>
+								</div>
+							</div>
+
+							<div class="warmup">
+								<p class="section-label tight">// WARM-UP</p>
+								<ol id="warmup-list"></ol>
+							</div>
+
+							<div class="actions">
+								<button class="btn btn-yes cut-btn"><span>✓ COMPLETE</span></button>
+								<button class="btn btn-no cut-btn"><span>✕ FAIL</span></button>
+							</div>
+						</div>
+					</section>
+				</div>
+			</div>
+			<figcaption>First working set · warm-up ramp + plates</figcaption>
+		</figure>
+
+		<!-- 3. Start screen -->
+		<figure class="shot">
+			<div class="phone" data-tab="workout">
+				<div class="screen">
+					<div class="nav">
+						<span class="nav-kicker">NIGHT CITY BARBELL CLUB</span>
+						<div class="nav-row"><h2 class="nav-title big glitch" data-text="WORKOUT">WORKOUT</h2></div>
+					</div>
+
+					<div class="banner banner-offline mono">⚠ OFFLINE // PLAN CACHED 2 HRS AGO</div>
+					<div class="banner banner-queue">
+						<span class="mono">⇡ 1 WORKOUT WAITING TO UPLOAD</span>
+						<button class="link">SYNC NOW</button>
+					</div>
+
+					<section class="cut card next-card">
+						<div class="cut-in">
+							<p class="mono kicker-sm">NEXT UP // WEEK 03</p>
+							<h3 class="next-title">DAY B</h3>
+							<ul class="preview">
+								<li><span>OVERHEAD PRESS</span><span class="mono"><b>5×3</b> @ <i data-w="47.6"></i></span><span class="tag tag-yellow">T1</span></li>
+								<li><span>DEADLIFT</span><span class="mono"><b>3×10</b> @ <i data-w="111.1"></i></span><span class="tag">T2</span></li>
+								<li><span>DB ROW</span><span class="mono"><b>3×15</b> @ <i data-w="27.2"></i></span><span class="tag tag-pink">T3</span></li>
+							</ul>
+						</div>
+					</section>
+
+					<button class="btn btn-yes big-start cut-btn"><span>▶ JACK IN</span></button>
+					<button class="btn btn-ghost cut-btn"><span>START EMPTY WORKOUT</span></button>
+				</div>
+			</div>
+			<figcaption>Start · offline with a queued upload</figcaption>
+		</figure>
+
+		<!-- 4. All done + PR -->
+		<figure class="shot">
+			<div class="phone" data-tab="workout">
+				<div class="screen">
+					<div class="nav">
+						<span class="nav-kicker">GZCLP // WEEK 03</span>
+						<div class="nav-row">
+							<h2 class="nav-title">DAY A</h2>
+							<button class="chip"><span class="chip-icon">↶</span> UNDO SET</button>
+						</div>
+					</div>
+
+					<section class="cut card done-card">
+						<div class="cut-in">
+							<p class="mono kicker-sm">ALL SETS LOGGED // 11/11</p>
+							<h3 class="done-title glitch" data-text="FLATLINED IT">FLATLINED IT</h3>
+							<p class="muted">Logged one wrong? Undo it before finishing.</p>
+							<button class="btn btn-yes cut-btn wide hazard"><span>FINISH WORKOUT</span></button>
+						</div>
+					</section>
+
+					<section class="pr cut">
+						<div class="cut-in">
+							<p class="mono kicker-sm pink">// NEW PERSONAL RECORDS</p>
+							<div class="pr-row"><span>BACK SQUAT</span><b><i data-w="104.3"></i> <i data-u></i> × 5</b></div>
+							<div class="pr-row"><span>EST. 1RM</span><b><i data-w="121.6"></i> <i data-u></i></b></div>
+						</div>
+					</section>
+
+					<div class="stats">
+						<div><span class="mono">VOLUME</span><b>12,480</b></div>
+						<div><span class="mono">TIME</span><b>58:12</b></div>
+						<div><span class="mono">AVG HR</span><b>131</b></div>
+					</div>
+				</div>
+			</div>
+			<figcaption>All sets complete · PRs</figcaption>
+		</figure>
+
+		<!-- 5. History -->
+		<figure class="shot">
+			<div class="phone" data-tab="history">
+				<div class="screen">
+					<div class="nav">
+						<span class="nav-kicker">LOG // 23 SESSIONS</span>
+						<div class="nav-row"><h2 class="nav-title big">HISTORY</h2></div>
+					</div>
+
+					<section class="cut card hist">
+						<div class="cut-in">
+							<div class="hist-head">
+								<div><h3>DAY A</h3><span class="mono muted">TUE 18 NOV · 58 MIN</span></div>
+								<span class="tag tag-pink">🏆 2 PR</span>
+							</div>
+							<svg class="hist-hr" viewBox="0 0 300 50" preserveAspectRatio="none"><path d="M0,40 C20,38 30,20 50,24 S80,10 100,18 S130,30 150,16 S190,6 210,20 S250,34 270,18 S290,26 300,22" /></svg>
+							<ul class="hist-list">
+								<li><span>BACK SQUAT</span><span class="mono">5 × 3 · <i data-w="104.3"></i></span></li>
+								<li><span>BENCH PRESS</span><span class="mono">3 × 10 · <i data-w="61.2"></i></span></li>
+								<li><span>LAT PULLDOWN</span><span class="mono">3 × 15 · <i data-w="45.4"></i></span></li>
+							</ul>
+							<div class="hist-actions">
+								<button class="link">EDIT</button>
+								<button class="link cyan">↗ STRAVA</button>
+								<button class="link danger">DELETE</button>
+							</div>
+						</div>
+					</section>
+
+					<section class="cut card hist dim">
+						<div class="cut-in">
+							<div class="hist-head">
+								<div><h3>HOTEL GYM</h3><span class="mono muted">SAT 15 NOV · 31 MIN · OFF-PLAN</span></div>
+							</div>
+							<ul class="hist-list">
+								<li><span>PUSH-UP</span><span class="mono">3 × 20</span></li>
+								<li><span>DB CURL</span><span class="mono">3 × 12 · <i data-w="13.6"></i></span></li>
+							</ul>
+						</div>
+					</section>
+				</div>
+			</div>
+			<figcaption>History · PR badge, edit/delete</figcaption>
+		</figure>
+
+		<!-- 6. Lock screen Live Activity -->
+		<figure class="shot">
+			<div class="phone lock">
+				<div class="lock-wall"></div>
+				<div class="island-pill"></div>
+				<div class="lock-time">9:41</div>
+				<div class="lock-date">Saturday 22 November</div>
+
+				<div class="live cut">
+					<div class="cut-in">
+						<div class="live-top mono"><span>DAY A</span><span>2/11 SETS</span></div>
+						<div class="live-main">
+							<div>
+								<div class="live-ex">BACK SQUAT</div>
+								<div class="live-sub mono">SET 3/5 · 3+ REPS @ <i data-w="102.1"></i> <i data-u></i></div>
+							</div>
+							<div class="live-timer mono" data-countdown></div>
+						</div>
+						<div class="bar"><span data-rest-bar></span></div>
+					</div>
+				</div>
+
+				<div class="lock-foot mono">⌁ swipe up to open</div>
+			</div>
+			<figcaption>Live Activity · lock screen</figcaption>
+		</figure>
+
+		<!-- 7. Dynamic Island over another app -->
+		<figure class="shot">
+			<div class="phone island-demo">
+				<div class="other-app">
+					<p class="mono">// ANOTHER APP</p>
+					<div class="ghost-line w80"></div>
+					<div class="ghost-line w60"></div>
+					<div class="ghost-card"></div>
+					<div class="ghost-line w70"></div>
+					<div class="ghost-line w40"></div>
+					<div class="ghost-card short"></div>
+				</div>
+
+				<div class="island expanded">
+					<div class="island-row">
+						<span class="mono island-k">⚡ 2/11 SETS</span>
+						<span class="island-timer mono" data-countdown></span>
+					</div>
+					<div class="island-ex">BACK SQUAT</div>
+					<div class="island-sub mono">SET 3/5 · 3+ REPS @ <i data-w="102.1"></i> <i data-u></i></div>
+					<div class="bar"><span data-rest-bar></span></div>
+				</div>
+
+				<div class="island-compact-demo">
+					<p class="mono">COMPACT (NOT PRESSED)</p>
+					<div class="island compact"><span class="isl-ic">⚡</span><span class="mono island-timer" data-countdown></span></div>
+				</div>
+			</div>
+			<figcaption>Dynamic Island · expanded (long-press) and compact</figcaption>
+		</figure>
+	</main>
+
+	<footer class="foot mono">Throwaway preview · <code>design/preview/</code> · phones at 402 × 874 pt · clock = SegmentedDigitalClock, unchanged</footer>
+
+	<script src="app.js"></script>
+</body>
+</html>
