@@ -114,6 +114,19 @@ struct SettingsView: View {
                     .pickerStyle(.segmented)
                 }
 
+                Section("Plans") {
+                    NavigationLink {
+                        PlansView()
+                    } label: {
+                        HStack {
+                            Text("Active plan")
+                            Spacer()
+                            Text(model.activePlan?.name ?? "None")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 Section("Strava") {
                     if let strava = model.stravaConnection {
                         if !strava.configured {

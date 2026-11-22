@@ -3,15 +3,20 @@
 	import {
 		addDayToActivePlan,
 		addExerciseToActivePlan,
+		deactivatePlan,
+		deletePlan,
 		fetchActivePlan,
+		fetchPlans,
 		moveExerciseToDay,
 		removeDayFromActivePlan,
 		removeExerciseFromActivePlan,
-		seedPlan
+		seedPlan,
+		setActivePlan
 	} from '$lib/workout-api';
 	import type {
 		ActivePlan,
 		AddExerciseToPlanInput,
+		PlanSummary,
 		Protocol,
 		SeedExerciseInput,
 		SeedWorkoutExerciseInput,
@@ -22,6 +27,7 @@
 		convertKgToUnit,
 		convertUnitToKg,
 		displayWeightFromKg,
+		formatDate,
 		getPreferredWeightUnit,
 		parseNonNegativeFloat,
 		parsePositiveFloat,
@@ -86,6 +92,9 @@
 	let errorMessage = $state('');
 	let infoMessage = $state('');
 	let activePlan = $state<ActivePlan | null>(null);
+	let plans = $state<PlanSummary[]>([]);
+	let showCreatePlan = $state(false);
+	let createAsActive = $state(true);
 
 	let planCreateMode = $state<PlanCreateMode>('GZCLP');
 
@@ -855,18 +864,21 @@
 	}
 
 	async function loadPlanPage() {
-		activePlan = await fetchActivePlan();
+		const [nextActivePlan, nextPlans] = await Promise.all([fetchActivePlan(), fetchPlans()]);
+		activePlan = nextActivePlan;
+		plans = nextPlans;
 		if (activePlan?.workouts.length) {
 			addExerciseTargetDay = String(activePlan.workouts[0].sequenceIndex);
 		}
 	}
 
-	async function runAction(action: () => Promise<void>, message?: string) {
+	async function runAction(action: () => Promise<unknown>, message?: string) {
 		loading = true;
 		errorMessage = '';
 		try {
-			await action();
+			const result = await action();
 			await loadPlanPage();
+			if (!message && typeof result === 'string') message = result;
 			if (message) {
 				infoMessage = message;
 				pushToast(message, 'success');
@@ -980,8 +992,10 @@
 				totalWeeks: null,
 				daysPerWeek: gzclpDays.length,
 				exercises,
-				workouts
+				workouts,
+				activate: willActivateNewPlan()
 			});
+			showCreatePlan = false;
 		}, 'Created GZCLP plan');
 	}
 
@@ -1050,9 +1064,42 @@
 				totalWeeks: null,
 				daysPerWeek: customDays.length,
 				exercises,
-				workouts
+				workouts,
+				activate: willActivateNewPlan()
 			});
+			showCreatePlan = false;
 		}, 'Created custom plan');
+	}
+
+	function willActivateNewPlan(): boolean {
+		// With no active plan there is nothing to keep, so a new plan always becomes active.
+		return !activePlan || createAsActive;
+	}
+
+	function planProgressLabel(plan: PlanSummary): string {
+		if (plan.isCompleted) return 'Completed';
+		if (plan.currentWeek === null) return 'Not started';
+		const day = (plan.currentWorkoutIndex ?? 0) + 1;
+		return `Week ${plan.currentWeek} · next day ${Math.min(day, Math.max(plan.daysPerWeek, 1))}`;
+	}
+
+	async function activatePlan(plan: PlanSummary) {
+		if (
+			plan.isCompleted &&
+			!window.confirm(`"${plan.name}" was completed. Restart it from week 1 and make it active?`)
+		) {
+			return;
+		}
+		await runAction(() => setActivePlan(plan.id));
+	}
+
+	async function deactivateSelectedPlan(plan: PlanSummary) {
+		await runAction(() => deactivatePlan(plan.id));
+	}
+
+	async function deleteSelectedPlan(plan: PlanSummary) {
+		if (!window.confirm(`Delete plan "${plan.name}" and all associated history?`)) return;
+		await runAction(() => deletePlan(plan.id));
 	}
 
 	async function addExerciseToExistingPlan() {
@@ -1216,21 +1263,81 @@
 </script>
 
 <section class="card">
-	<h1>Plan</h1>
+	<div class="plans-header">
+		<h1>Plans</h1>
+		{#if plans.length > 0}
+			<button
+				class={showCreatePlan ? '' : 'primary'}
+				onclick={() => (showCreatePlan = !showCreatePlan)}
+				disabled={loading}
+			>
+				{showCreatePlan ? 'Cancel new plan' : '+ New plan'}
+			</button>
+		{/if}
+	</div>
 	{#if activePlan}
 		<p class="subtle">
 			Active plan: <strong>{activePlan.name}</strong> · days/week: {activePlan.daysPerWeek} · week
 			{activePlan.currentWeek}
 		</p>
+	{:else if plans.length > 0}
+		<p class="subtle">No active plan. Activate one below or create a new one.</p>
 	{:else}
-		<p class="subtle">No plan loaded. Create one now.</p>
+		<p class="subtle">No plans yet. Create one now.</p>
+	{/if}
+
+	{#if plans.length > 0}
+		<ul class="plan-list">
+			{#each plans as plan (plan.id)}
+				<li class="plan-item" class:plan-item-active={plan.isActive}>
+					<div class="plan-item-main">
+						<div class="plan-item-title">
+							<strong>{plan.name}</strong>
+							{#if plan.isActive && !plan.isCompleted}
+								<span class="badge badge-active">Active</span>
+							{:else if plan.isCompleted}
+								<span class="badge badge-completed">Completed</span>
+							{:else}
+								<span class="badge">Inactive</span>
+							{/if}
+						</div>
+						<div class="subtle plan-item-meta">
+							{plan.daysPerWeek} day{plan.daysPerWeek === 1 ? '' : 's'} · {plan.exerciseCount}
+							exercise{plan.exerciseCount === 1 ? '' : 's'} · {planProgressLabel(plan)} ·
+							{plan.completedWorkoutCount} workout{plan.completedWorkoutCount === 1 ? '' : 's'} logged
+							{#if plan.lastWorkoutAt}· last {formatDate(plan.lastWorkoutAt)}{/if}
+						</div>
+					</div>
+					<div class="inline-actions">
+						{#if plan.isActive && !plan.isCompleted}
+							<button onclick={() => deactivateSelectedPlan(plan)} disabled={loading}>
+								Deactivate
+							</button>
+						{:else}
+							<button class="primary" onclick={() => activatePlan(plan)} disabled={loading}>
+								{plan.isCompleted ? 'Restart & activate' : 'Set active'}
+							</button>
+						{/if}
+						<button class="danger" onclick={() => deleteSelectedPlan(plan)} disabled={loading}>
+							Delete
+						</button>
+					</div>
+				</li>
+			{/each}
+		</ul>
 	{/if}
 </section>
 
 
-{#if !activePlan}
+{#if !activePlan || showCreatePlan}
 	<section class="card">
 		<h2>Create Plan</h2>
+		{#if activePlan}
+			<label class="checkbox-row">
+				<input type="checkbox" bind:checked={createAsActive} />
+				Make this the active plan (current plan "{activePlan.name}" becomes inactive; its progress is kept)
+			</label>
+		{/if}
 		<div class="mode-toggle">
 			<button class={planCreateMode === 'GZCLP' ? 'primary' : ''} onclick={() => (planCreateMode = 'GZCLP')}>
 				GZCLP Template
@@ -1751,6 +1858,81 @@
 {/if}
 
 <style>
+	.plans-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		gap: 0.8rem;
+	}
+
+	.plan-list {
+		list-style: none;
+		margin: 0.6rem 0 0;
+		padding: 0;
+		display: grid;
+		gap: 0.6rem;
+	}
+
+	.plan-item {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		flex-wrap: wrap;
+		gap: 0.7rem;
+		border: 1px solid #1f2937;
+		border-radius: 10px;
+		padding: 0.7rem 0.8rem;
+	}
+
+	.plan-item-active {
+		border-color: #22c55e;
+	}
+
+	.plan-item-main {
+		display: grid;
+		gap: 0.25rem;
+		min-width: 0;
+	}
+
+	.plan-item-title {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+
+	.plan-item-meta {
+		font-size: 0.85rem;
+	}
+
+	.badge {
+		font-size: 0.72rem;
+		padding: 0.1rem 0.45rem;
+		border-radius: 999px;
+		border: 1px solid #374151;
+		color: #9ca3af;
+	}
+
+	.badge-active {
+		border-color: #22c55e;
+		color: #22c55e;
+	}
+
+	.badge-completed {
+		border-color: #60a5fa;
+		color: #60a5fa;
+	}
+
+	.checkbox-row {
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+		margin-bottom: 0.8rem;
+	}
+
+	.checkbox-row input {
+		width: auto;
+	}
+
 	.mode-toggle {
 		display: inline-flex;
 		gap: 0.5rem;

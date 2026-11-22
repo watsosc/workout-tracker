@@ -23,6 +23,7 @@ A **cost-first, single-user workout tracker** built for fast iteration and near-
 
 ### Plan management
 - Create plan (GZCLP template or custom)
+- Multiple plans: one active at a time, switch/deactivate/delete from `/plan` (web) or Settings → Plans (iOS); each plan keeps its own progress
 - Add/remove days
 - Add/remove exercises
 - Drag/drop exercises between days

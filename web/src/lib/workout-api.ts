@@ -5,6 +5,7 @@ import type {
 	BaselineOverrideInput,
 	Dashboard,
 	ExerciseCatalogMatch,
+	PlanSummary,
 	ExerciseProgressPoint,
 	HeartRateSample,
 	SeedExerciseInput,
@@ -204,6 +205,7 @@ const seedPlanMutation = `
 		$workouts: [SeedPlanWorkoutInput!]!
 		$exercises: [SeedExerciseInput!]!
 		$daysPerWeek: Int
+		$activate: Boolean! = true
 	) {
 		seedPlan(
 			planName: $planName
@@ -211,10 +213,57 @@ const seedPlanMutation = `
 			workouts: $workouts
 			exercises: $exercises
 			daysPerWeek: $daysPerWeek
+			activate: $activate
 		) {
 			ok
 			planId
 			planRunId
+		}
+	}
+`;
+
+const plansQuery = `
+	query Plans {
+		plans {
+			id
+			name
+			isActive
+			isCompleted
+			totalWeeks
+			daysPerWeek
+			exerciseCount
+			currentWeek
+			currentWorkoutIndex
+			completedWorkoutCount
+			lastWorkoutAt
+			createdAt
+		}
+	}
+`;
+
+const setActivePlanMutation = `
+	mutation SetActivePlan($planId: Int!) {
+		setActivePlan(planId: $planId) {
+			ok
+			message
+		}
+	}
+`;
+
+const deactivatePlanMutation = `
+	mutation DeactivatePlan($planId: Int!) {
+		deactivatePlan(planId: $planId) {
+			ok
+			message
+		}
+	}
+`;
+
+const deletePlanByIdMutation = `
+	mutation DeletePlanById($planId: Int!) {
+		deletePlan(planId: $planId) {
+			ok
+			message
 		}
 	}
 `;
@@ -454,8 +503,34 @@ export async function seedPlan(input: {
 	exercises: SeedExerciseInput[];
 	workouts: SeedWorkoutInput[];
 	daysPerWeek?: number;
+	activate?: boolean;
 }): Promise<void> {
-	await gql(seedPlanMutation, input);
+	await gql(seedPlanMutation, { ...input, activate: input.activate ?? true });
+}
+
+export async function fetchPlans(): Promise<PlanSummary[]> {
+	const data = await gql<{ plans: PlanSummary[] }>(plansQuery);
+	return data.plans;
+}
+
+function ensureOk(result: MutationResult): string {
+	if (!result.ok) throw new Error(result.message);
+	return result.message;
+}
+
+export async function setActivePlan(planId: number): Promise<string> {
+	const data = await gql<{ setActivePlan: MutationResult }>(setActivePlanMutation, { planId });
+	return ensureOk(data.setActivePlan);
+}
+
+export async function deactivatePlan(planId: number): Promise<string> {
+	const data = await gql<{ deactivatePlan: MutationResult }>(deactivatePlanMutation, { planId });
+	return ensureOk(data.deactivatePlan);
+}
+
+export async function deletePlan(planId: number): Promise<string> {
+	const data = await gql<{ deletePlan: MutationResult }>(deletePlanByIdMutation, { planId });
+	return ensureOk(data.deletePlan);
 }
 
 export async function startWorkout(): Promise<void> {

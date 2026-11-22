@@ -491,9 +491,9 @@
 		{:else}
 			<div>
 				<h1>Workout</h1>
-				<p class="subtle">No active plan. Create one first.</p>
+				<p class="subtle">No active plan. Create a plan or activate an existing one.</p>
 			</div>
-			<a class="link-btn" href="/plan">Create Plan</a>
+			<a class="link-btn" href="/plan">Manage Plans</a>
 		{/if}
 	</section>
 

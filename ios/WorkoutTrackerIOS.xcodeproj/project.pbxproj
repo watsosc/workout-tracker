@@ -18,6 +18,7 @@
 		A00100010001000100010009 /* AnalyticsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010009 /* AnalyticsView.swift */; };
 		A0010001000100010001000A /* HistoryView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000A /* HistoryView.swift */; };
 		A0010001000100010001000B /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000B /* SettingsView.swift */; };
+		A00100010001000100010010 /* PlansView.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200010001000100010010 /* PlansView.swift */; };
 		A0010001000100010001000C /* HeartRateBluetoothManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000E /* HeartRateBluetoothManager.swift */; };
 		A0010001000100010001000D /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = A0020001000100010001000F /* Assets.xcassets */; };
 /* End PBXBuildFile section */
@@ -34,6 +35,7 @@
 		A00200010001000100010009 /* AnalyticsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AnalyticsView.swift; sourceTree = "<group>"; };
 		A0020001000100010001000A /* HistoryView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryView.swift; sourceTree = "<group>"; };
 		A0020001000100010001000B /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		A00200010001000100010010 /* PlansView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PlansView.swift; sourceTree = "<group>"; };
 		A0020001000100010001000C /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		A0020001000100010001000D /* WorkoutTrackerIOS.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WorkoutTrackerIOS.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A0020001000100010001000E /* HeartRateBluetoothManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeartRateBluetoothManager.swift; sourceTree = "<group>"; };
@@ -108,6 +110,7 @@
 				A00400010001000100010009 /* Analytics */,
 				A0040001000100010001000A /* History */,
 				A0040001000100010001000B /* Settings */,
+				A0040001000100010001000C /* Plans */,
 			);
 			path = Features;
 			sourceTree = "<group>";
@@ -150,6 +153,14 @@
 				A0020001000100010001000B /* SettingsView.swift */,
 			);
 			path = Settings;
+			sourceTree = "<group>";
+		};
+		A0040001000100010001000C /* Plans */ = {
+			isa = PBXGroup;
+			children = (
+				A00200010001000100010010 /* PlansView.swift */,
+			);
+			path = Plans;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -232,6 +243,7 @@
 				A00100010001000100010009 /* AnalyticsView.swift in Sources */,
 				A0010001000100010001000A /* HistoryView.swift in Sources */,
 				A0010001000100010001000B /* SettingsView.swift in Sources */,
+				A00100010001000100010010 /* PlansView.swift in Sources */,
 				A0010001000100010001000C /* HeartRateBluetoothManager.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

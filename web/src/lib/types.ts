@@ -54,6 +54,21 @@ export type ActivePlan = {
 	workouts: ActivePlanWorkout[];
 };
 
+export type PlanSummary = {
+	id: number;
+	name: string;
+	isActive: boolean;
+	isCompleted: boolean;
+	totalWeeks: number | null;
+	daysPerWeek: number;
+	exerciseCount: number;
+	currentWeek: number | null;
+	currentWorkoutIndex: number | null;
+	completedWorkoutCount: number;
+	lastWorkoutAt: string | null;
+	createdAt: string;
+};
+
 export type SessionSet = {
 	id: number;
 	setIndex: number;

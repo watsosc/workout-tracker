@@ -144,6 +144,48 @@ def _migrate_run_exercise_states_tier(conn) -> None:
     )
 
 
+def _migrate_plan_active_flags(conn) -> None:
+    """Make `plans.is_active` the source of truth for the active plan.
+
+    Older databases resolved the active plan from the newest ACTIVE plan run. Ensure each user
+    has at most one active plan, and that a user whose active plan was previously implied by a
+    plan run gets that plan flagged as active.
+    """
+    if not _sqlite_table_exists(conn, "plans") or not _sqlite_table_exists(conn, "plan_runs"):
+        return
+
+    user_ids = [row[0] for row in conn.exec_driver_sql("SELECT DISTINCT user_id FROM plans").fetchall()]
+    for user_id in user_ids:
+        active_ids = [
+            row[0]
+            for row in conn.exec_driver_sql(
+                "SELECT id FROM plans WHERE user_id = ? AND is_active = 1 ORDER BY id DESC",
+                (user_id,),
+            ).fetchall()
+        ]
+        if len(active_ids) > 1:
+            keep_id = active_ids[0]
+            conn.exec_driver_sql(
+                "UPDATE plans SET is_active = 0 WHERE user_id = ? AND id != ?",
+                (user_id, keep_id),
+            )
+            continue
+        if active_ids:
+            continue
+
+        row = conn.exec_driver_sql(
+            """
+            SELECT pr.plan_id FROM plan_runs pr
+            JOIN plans p ON p.id = pr.plan_id
+            WHERE pr.user_id = ? AND pr.status = 'ACTIVE'
+            ORDER BY pr.id DESC LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+        if row:
+            conn.exec_driver_sql("UPDATE plans SET is_active = 1 WHERE id = ?", (row[0],))
+
+
 def apply_sqlite_migrations() -> None:
     if not is_sqlite:
         return
@@ -153,6 +195,7 @@ def apply_sqlite_migrations() -> None:
         _migrate_session_sets_duration_seconds(conn)
         _migrate_oauth_connections_provider_username(conn)
         _migrate_run_exercise_states_tier(conn)
+        _migrate_plan_active_flags(conn)
 
 
 @contextmanager

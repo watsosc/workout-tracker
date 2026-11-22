@@ -62,6 +62,24 @@ struct ActivePlan: Codable, Identifiable {
     let workouts: [ActivePlanWorkout]
 }
 
+struct PlanSummary: Codable, Identifiable {
+    let id: Int
+    let name: String
+    let isActive: Bool
+    let isCompleted: Bool
+    let totalWeeks: Int?
+    let daysPerWeek: Int
+    let exerciseCount: Int
+    let currentWeek: Int?
+    let currentWorkoutIndex: Int?
+    let completedWorkoutCount: Int
+    let lastWorkoutAt: String?
+    let createdAt: String
+
+    /// Active and still running (a completed plan can remain flagged active until restarted).
+    var isRunning: Bool { isActive && !isCompleted }
+}
+
 struct SessionSet: Codable, Identifiable {
     let id: Int
     let setIndex: Int

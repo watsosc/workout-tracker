@@ -11,6 +11,7 @@ This is a native iOS frontend for the existing workout backend.
   - History
   - Settings
 - **Plan tab is intentionally excluded** (no plan create/edit on iOS).
+- **Settings → Plans** lists all plans and lets you switch which one is active (or deactivate it).
 - Workout screen includes live Bluetooth heart-rate support (standard BLE Heart Rate service, compatible with Garmin HR broadcasting):
   - live chart (left)
   - latest BPM text (right)

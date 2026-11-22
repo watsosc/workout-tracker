@@ -301,6 +301,22 @@ class ActivePlanType:
     workouts: list[PlanWorkoutType]
 
 
+@strawberry.type
+class PlanSummaryType:
+    id: int
+    name: str
+    is_active: bool
+    is_completed: bool
+    total_weeks: int | None
+    days_per_week: int
+    exercise_count: int
+    current_week: int | None
+    current_workout_index: int | None
+    completed_workout_count: int
+    last_workout_at: datetime | None
+    created_at: datetime
+
+
 @strawberry.input
 class SeedExerciseInput:
     name: str
@@ -1023,19 +1039,175 @@ def _get_or_create_exercise_by_name(session, exercise_name: str) -> Exercise:
     return exercise
 
 
-def _active_plan_context(session, user_id: int) -> ActivePlanContext | None:
-    run = session.scalar(
+def _latest_active_run(session, plan_id: int) -> PlanRun | None:
+    return session.scalar(
         select(PlanRun)
-        .where(and_(PlanRun.user_id == user_id, PlanRun.status == PlanRunStatus.ACTIVE))
+        .where(and_(PlanRun.plan_id == plan_id, PlanRun.status == PlanRunStatus.ACTIVE))
         .order_by(PlanRun.id.desc())
     )
-    if not run:
-        return None
 
-    plan = session.get(Plan, run.plan_id)
+
+def _active_plan_context(session, user_id: int) -> ActivePlanContext | None:
+    plan = session.scalar(
+        select(Plan)
+        .where(and_(Plan.user_id == user_id, Plan.is_active.is_(True)))
+        .order_by(Plan.id.desc())
+    )
     if not plan:
         return None
+
+    run = _latest_active_run(session, plan.id)
+    if not run:
+        return None
     return ActivePlanContext(plan=plan, run=run)
+
+
+def _get_user_plan(session, user_id: int, plan_id: int) -> Plan | None:
+    plan = session.get(Plan, plan_id)
+    if not plan or plan.user_id != user_id:
+        return None
+    return plan
+
+
+def _in_progress_session_plan(session, user_id: int) -> Plan | None:
+    """Return the plan that owns the user's in-progress workout session, if any."""
+    ws = session.scalar(
+        select(WorkoutSession)
+        .where(
+            and_(
+                WorkoutSession.user_id == user_id,
+                WorkoutSession.status == WorkoutSessionStatus.IN_PROGRESS,
+            )
+        )
+        .order_by(WorkoutSession.started_at.desc())
+    )
+    if not ws:
+        return None
+    run = session.get(PlanRun, ws.plan_run_id)
+    if not run:
+        return None
+    return session.get(Plan, run.plan_id)
+
+
+def _start_plan_run(session, user_id: int, plan_id: int) -> PlanRun:
+    """Create a fresh run for a plan, snapshotting current 1RM baselines for reset support."""
+    run = PlanRun(user_id=user_id, plan_id=plan_id, current_week=1, current_workout_index=0)
+    session.add(run)
+    session.flush()
+
+    exercise_ids = set(
+        session.scalars(
+            select(PlanWorkoutExercise.exercise_id)
+            .join(PlanWorkout, PlanWorkout.id == PlanWorkoutExercise.plan_workout_id)
+            .where(PlanWorkout.plan_id == plan_id)
+        ).all()
+    )
+    for exercise_id in exercise_ids:
+        baseline = _get_baseline(session, user_id, exercise_id)
+        if not baseline:
+            continue
+        _upsert_plan_run_baseline(
+            session,
+            plan_run_id=run.id,
+            exercise_id=exercise_id,
+            baseline_1rm_kg=baseline.baseline_1rm_kg,
+        )
+    return run
+
+
+def _plan_summary_type(session, plan: Plan) -> PlanSummaryType:
+    workouts = _get_workouts_in_plan(session, plan.id)
+    workout_ids = [w.id for w in workouts]
+    exercise_count = 0
+    if workout_ids:
+        exercise_count = int(
+            session.scalar(
+                select(func.count(PlanWorkoutExercise.id)).where(
+                    PlanWorkoutExercise.plan_workout_id.in_(workout_ids)
+                )
+            )
+            or 0
+        )
+
+    active_run = _latest_active_run(session, plan.id)
+    latest_run = active_run or session.scalar(
+        select(PlanRun).where(PlanRun.plan_id == plan.id).order_by(PlanRun.id.desc())
+    )
+
+    run_ids = session.scalars(select(PlanRun.id).where(PlanRun.plan_id == plan.id)).all()
+    completed_count = 0
+    last_workout_at = None
+    if run_ids:
+        completed_filter = and_(
+            WorkoutSession.plan_run_id.in_(run_ids),
+            WorkoutSession.status == WorkoutSessionStatus.COMPLETED,
+        )
+        completed_count = int(
+            session.scalar(select(func.count(WorkoutSession.id)).where(completed_filter)) or 0
+        )
+        last_workout_at = session.scalar(
+            select(func.max(WorkoutSession.finished_at)).where(completed_filter)
+        )
+
+    return PlanSummaryType(
+        id=plan.id,
+        name=plan.name,
+        is_active=bool(plan.is_active),
+        is_completed=latest_run is not None and active_run is None,
+        total_weeks=plan.total_weeks,
+        days_per_week=len(workouts),
+        exercise_count=exercise_count,
+        current_week=latest_run.current_week if latest_run else None,
+        current_workout_index=latest_run.current_workout_index if latest_run else None,
+        completed_workout_count=completed_count,
+        last_workout_at=last_workout_at,
+        created_at=plan.created_at,
+    )
+
+
+def _delete_plan_cascade(session, plan: Plan) -> None:
+    run_ids = session.scalars(select(PlanRun.id).where(PlanRun.plan_id == plan.id)).all()
+
+    session_ids = (
+        session.scalars(
+            select(WorkoutSession.id).where(WorkoutSession.plan_run_id.in_(run_ids))
+        ).all()
+        if run_ids
+        else []
+    )
+    entry_ids = (
+        session.scalars(
+            select(SessionExerciseEntry.id).where(SessionExerciseEntry.session_id.in_(session_ids))
+        ).all()
+        if session_ids
+        else []
+    )
+
+    if entry_ids:
+        session.execute(delete(SessionSet).where(SessionSet.entry_id.in_(entry_ids)))
+        session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
+
+    if session_ids:
+        session.execute(delete(HeartRateSample).where(HeartRateSample.session_id.in_(session_ids)))
+        session.execute(delete(WorkoutExport).where(WorkoutExport.session_id.in_(session_ids)))
+        session.execute(delete(WorkoutSession).where(WorkoutSession.id.in_(session_ids)))
+
+    if run_ids:
+        session.execute(delete(RunExerciseState).where(RunExerciseState.plan_run_id.in_(run_ids)))
+        session.execute(delete(PlanRunBaseline).where(PlanRunBaseline.plan_run_id.in_(run_ids)))
+        session.execute(delete(ResetEvent).where(ResetEvent.plan_run_id.in_(run_ids)))
+        session.execute(delete(PlanRun).where(PlanRun.id.in_(run_ids)))
+
+    workout_ids = session.scalars(
+        select(PlanWorkout.id).where(PlanWorkout.plan_id == plan.id)
+    ).all()
+    if workout_ids:
+        session.execute(
+            delete(PlanWorkoutExercise).where(PlanWorkoutExercise.plan_workout_id.in_(workout_ids))
+        )
+        session.execute(delete(PlanWorkout).where(PlanWorkout.id.in_(workout_ids)))
+
+    session.execute(delete(Plan).where(Plan.id == plan.id))
 
 
 def _build_session_type(session, workout_session: WorkoutSession) -> WorkoutSessionType:
@@ -1409,6 +1581,17 @@ class Query:
         with db_session() as session:
             user = _get_default_user(session)
             return _active_plan_type(session, user.id)
+
+    @strawberry.field
+    def plans(self) -> list[PlanSummaryType]:
+        with db_session() as session:
+            user = _get_default_user(session)
+            rows = session.scalars(
+                select(Plan)
+                .where(Plan.user_id == user.id)
+                .order_by(Plan.is_active.desc(), Plan.created_at.desc(), Plan.id.desc())
+            ).all()
+            return [_plan_summary_type(session, plan) for plan in rows]
 
     @strawberry.field
     def strava_connection(self) -> StravaConnectionType:
@@ -1918,9 +2101,16 @@ class Mutation:
         workouts: list[SeedPlanWorkoutInput],
         exercises: list[SeedExerciseInput],
         days_per_week: int | None = None,
+        activate: bool = True,
     ) -> SeedResult:
         with db_session() as session:
             user = _get_default_user(session)
+
+            if activate and _in_progress_session_plan(session, user.id) is not None:
+                raise ValueError(
+                    "Finish the in-progress workout before creating a new active plan, "
+                    "or create this plan as inactive."
+                )
 
             by_name: dict[str, Exercise] = {}
             baseline_by_name: dict[str, float] = {}
@@ -1967,13 +2157,14 @@ class Mutation:
             if any(idx >= days_per_week for idx in sequence_indexes):
                 raise ValueError("workout sequence_index must be < days_per_week")
 
-            session.execute(
-                update(Plan)
-                .where(and_(Plan.user_id == user.id, Plan.is_active.is_(True)))
-                .values(is_active=False)
-            )
+            if activate:
+                session.execute(
+                    update(Plan)
+                    .where(and_(Plan.user_id == user.id, Plan.is_active.is_(True)))
+                    .values(is_active=False)
+                )
 
-            plan = Plan(user_id=user.id, name=plan_name, total_weeks=total_weeks, is_active=True)
+            plan = Plan(user_id=user.id, name=plan_name, total_weeks=total_weeks, is_active=activate)
             session.add(plan)
             session.flush()
 
@@ -2049,24 +2240,91 @@ class Mutation:
                     )
                     used_exercise_ids.add(ex_model.id)
 
-            run = PlanRun(user_id=user.id, plan_id=plan.id, current_week=1, current_workout_index=0)
-            session.add(run)
-            session.flush()
-
-            for exercise_id in used_exercise_ids:
-                baseline = _get_baseline(session, user.id, exercise_id)
-                if not baseline:
-                    continue
-                _upsert_plan_run_baseline(
-                    session,
-                    plan_run_id=run.id,
-                    exercise_id=exercise_id,
-                    baseline_1rm_kg=baseline.baseline_1rm_kg,
-                )
-
+            run = _start_plan_run(session, user.id, plan.id)
             session.commit()
 
             return SeedResult(ok=True, plan_id=plan.id, plan_run_id=run.id)
+
+    @strawberry.mutation
+    def set_active_plan(self, plan_id: int) -> MutationResult:
+        """Mark a plan as the single active plan; all other plans become inactive.
+
+        Progress is kept per plan: switching back to a plan resumes its existing run. If the
+        plan has no active run (never started or completed), a fresh run is started.
+        """
+        with db_session() as session:
+            user = _get_default_user(session)
+            plan = _get_user_plan(session, user.id, plan_id)
+            if not plan:
+                return MutationResult(ok=False, message="Plan not found")
+
+            in_progress_plan = _in_progress_session_plan(session, user.id)
+            if in_progress_plan is not None and in_progress_plan.id != plan.id:
+                return MutationResult(
+                    ok=False,
+                    message=f"Finish the in-progress workout for '{in_progress_plan.name}' before switching plans",
+                )
+
+            run = _latest_active_run(session, plan.id)
+            if plan.is_active and run is not None:
+                return MutationResult(ok=True, message=f"'{plan.name}' is already active")
+
+            session.execute(
+                update(Plan)
+                .where(and_(Plan.user_id == user.id, Plan.id != plan.id, Plan.is_active.is_(True)))
+                .values(is_active=False)
+            )
+            plan.is_active = True
+
+            restarted = run is None
+            if restarted:
+                _start_plan_run(session, user.id, plan.id)
+
+            session.commit()
+            suffix = " (started from week 1)" if restarted else ""
+            return MutationResult(ok=True, message=f"'{plan.name}' is now the active plan{suffix}")
+
+    @strawberry.mutation
+    def deactivate_plan(self, plan_id: int) -> MutationResult:
+        """Mark a plan inactive. Its progress is kept and resumes if it is reactivated."""
+        with db_session() as session:
+            user = _get_default_user(session)
+            plan = _get_user_plan(session, user.id, plan_id)
+            if not plan:
+                return MutationResult(ok=False, message="Plan not found")
+            if not plan.is_active:
+                return MutationResult(ok=True, message=f"'{plan.name}' is already inactive")
+
+            in_progress_plan = _in_progress_session_plan(session, user.id)
+            if in_progress_plan is not None and in_progress_plan.id == plan.id:
+                return MutationResult(
+                    ok=False,
+                    message="Finish the in-progress workout before deactivating this plan",
+                )
+
+            plan.is_active = False
+            session.commit()
+            return MutationResult(ok=True, message=f"'{plan.name}' is now inactive")
+
+    @strawberry.mutation
+    def delete_plan(self, plan_id: int) -> MutationResult:
+        with db_session() as session:
+            user = _get_default_user(session)
+            plan = _get_user_plan(session, user.id, plan_id)
+            if not plan:
+                return MutationResult(ok=False, message="Plan not found")
+
+            in_progress_plan = _in_progress_session_plan(session, user.id)
+            if in_progress_plan is not None and in_progress_plan.id == plan.id:
+                return MutationResult(
+                    ok=False,
+                    message="Finish the in-progress workout before deleting this plan",
+                )
+
+            name = plan.name
+            _delete_plan_cascade(session, plan)
+            session.commit()
+            return MutationResult(ok=True, message=f"Deleted plan '{name}'")
 
     @strawberry.mutation
     def add_exercise_to_active_plan(self, input: AddExerciseToActivePlanInput) -> MutationResult:
@@ -2390,52 +2648,10 @@ class Mutation:
             if not ctx:
                 return MutationResult(ok=False, message="No active plan to delete")
 
-            runs = session.scalars(
-                select(PlanRun).where(PlanRun.plan_id == ctx.plan.id)
-            ).all()
-            run_ids = [r.id for r in runs]
-
-            if run_ids:
-                session_ids = session.scalars(
-                    select(WorkoutSession.id).where(WorkoutSession.plan_run_id.in_(run_ids))
-                ).all()
-            else:
-                session_ids = []
-
-            if session_ids:
-                entry_ids = session.scalars(
-                    select(SessionExerciseEntry.id).where(SessionExerciseEntry.session_id.in_(session_ids))
-                ).all()
-            else:
-                entry_ids = []
-
-            if entry_ids:
-                session.execute(delete(SessionSet).where(SessionSet.entry_id.in_(entry_ids)))
-                session.execute(delete(SessionExerciseEntry).where(SessionExerciseEntry.id.in_(entry_ids)))
-
-            if session_ids:
-                session.execute(delete(HeartRateSample).where(HeartRateSample.session_id.in_(session_ids)))
-                session.execute(delete(WorkoutExport).where(WorkoutExport.session_id.in_(session_ids)))
-                session.execute(delete(WorkoutSession).where(WorkoutSession.id.in_(session_ids)))
-
-            if run_ids:
-                session.execute(delete(RunExerciseState).where(RunExerciseState.plan_run_id.in_(run_ids)))
-                session.execute(delete(PlanRunBaseline).where(PlanRunBaseline.plan_run_id.in_(run_ids)))
-                session.execute(delete(ResetEvent).where(ResetEvent.plan_run_id.in_(run_ids)))
-                session.execute(delete(PlanRun).where(PlanRun.id.in_(run_ids)))
-
-            workout_ids = session.scalars(
-                select(PlanWorkout.id).where(PlanWorkout.plan_id == ctx.plan.id)
-            ).all()
-            if workout_ids:
-                session.execute(
-                    delete(PlanWorkoutExercise).where(PlanWorkoutExercise.plan_workout_id.in_(workout_ids))
-                )
-                session.execute(delete(PlanWorkout).where(PlanWorkout.id.in_(workout_ids)))
-
-            session.execute(delete(Plan).where(Plan.id == ctx.plan.id))
+            name = ctx.plan.name
+            _delete_plan_cascade(session, ctx.plan)
             session.commit()
-            return MutationResult(ok=True, message=f"Deleted plan '{ctx.plan.name}'")
+            return MutationResult(ok=True, message=f"Deleted plan '{name}'")
 
     @strawberry.mutation
     def start_workout(self, plan_workout_id: int | None = None) -> WorkoutSessionType:

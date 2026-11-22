@@ -17,6 +17,27 @@ struct WorkoutAPI {
         return try await client.execute(Self.activePlanQuery, dataType: Data.self).activePlan
     }
 
+    func fetchPlans() async throws -> [PlanSummary] {
+        struct Data: Decodable { let plans: [PlanSummary] }
+        return try await client.execute(Self.plansQuery, dataType: Data.self).plans
+    }
+
+    @discardableResult
+    func setActivePlan(planId: Int) async throws -> String {
+        struct Data: Decodable { let setActivePlan: MutationResult }
+        let result = try await client.execute(Self.setActivePlanMutation, variables: ["planId": planId], dataType: Data.self).setActivePlan
+        guard result.ok else { throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message]) }
+        return result.message
+    }
+
+    @discardableResult
+    func deactivatePlan(planId: Int) async throws -> String {
+        struct Data: Decodable { let deactivatePlan: MutationResult }
+        let result = try await client.execute(Self.deactivatePlanMutation, variables: ["planId": planId], dataType: Data.self).deactivatePlan
+        guard result.ok else { throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message]) }
+        return result.message
+    }
+
     func fetchActiveSession() async throws -> WorkoutSession? {
         struct Data: Decodable { let activeWorkoutSession: WorkoutSession? }
         return try await client.execute(Self.activeSessionQuery, dataType: Data.self).activeWorkoutSession
@@ -186,6 +207,43 @@ private extension WorkoutAPI {
                     amrapLastSet
                 }
             }
+        }
+    }
+    """
+
+    static let plansQuery = """
+    query Plans {
+        plans {
+            id
+            name
+            isActive
+            isCompleted
+            totalWeeks
+            daysPerWeek
+            exerciseCount
+            currentWeek
+            currentWorkoutIndex
+            completedWorkoutCount
+            lastWorkoutAt
+            createdAt
+        }
+    }
+    """
+
+    static let setActivePlanMutation = """
+    mutation SetActivePlan($planId: Int!) {
+        setActivePlan(planId: $planId) {
+            ok
+            message
+        }
+    }
+    """
+
+    static let deactivatePlanMutation = """
+    mutation DeactivatePlan($planId: Int!) {
+        deactivatePlan(planId: $planId) {
+            ok
+            message
         }
     }
     """

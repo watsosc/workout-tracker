@@ -322,7 +322,7 @@ struct WorkoutView: View {
             .disabled(model.loading || model.activePlan == nil)
 
             if model.activePlan == nil {
-                Text("No active plan found. Build a plan on web first.")
+                Text("No active plan. Pick one in Settings → Plans, or build one on web.")
                     .foregroundStyle(.secondary)
             }
         }
