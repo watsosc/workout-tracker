@@ -94,6 +94,8 @@ struct SessionSet: Codable, Identifiable {
 
 struct SessionEntry: Codable, Identifiable {
     let id: Int
+    let planWorkoutExerciseId: Int
+    let equipmentType: String?
     let exerciseId: Int
     let exerciseName: String
     let plannedSets: Int
@@ -123,7 +125,62 @@ struct WorkoutSession: Codable, Identifiable {
     let stravaActivityId: String?
     let stravaActivityUrl: String?
     let stravaLastError: String?
+    let planWorkoutId: Int
+    let planWorkoutName: String
     let entries: [SessionEntry]
+    let personalRecords: [PersonalRecord]?
+}
+
+struct PersonalRecord: Codable, Identifiable, Hashable {
+    let exerciseName: String
+    let kind: String // "WEIGHT" | "ESTIMATED_1RM"
+    let valueKg: Double
+    let reps: Int
+    let previousKg: Double
+
+    var id: String { "\(exerciseName)-\(kind)" }
+
+    func describe(unit: WeightUnit) -> String {
+        let value = "\(WeightMath.displayWeightFromKg(valueKg, unit: unit)) \(unit.label)"
+        return kind == "WEIGHT"
+            ? "\(exerciseName) heaviest: \(value) × \(reps)"
+            : "\(exerciseName) est. 1RM: \(value)"
+    }
+}
+
+struct PrescribedSet: Codable, Hashable {
+    let setIndex: Int
+    let targetReps: Int?
+    let isAmrap: Bool
+    let weightKg: Double
+}
+
+struct PrescribedEntry: Codable, Identifiable, Hashable {
+    let planWorkoutExerciseId: Int
+    let exerciseId: Int
+    let exerciseName: String
+    let plannedSets: Int
+    let plannedReps: Int
+    let plannedWeightKg: Double
+    let progressionProtocol: ProtocolType
+    let tier: String?
+    let equipmentType: String?
+    let expectedRestSeconds: Int
+    let sets: [PrescribedSet]
+
+    var id: Int { planWorkoutExerciseId }
+}
+
+/// The next workout as computed by the server. Cached so a workout can be started offline.
+struct WorkoutPrescription: Codable, Hashable {
+    let planId: Int
+    let planName: String
+    let planWorkoutId: Int
+    let workoutName: String
+    let sequenceIndex: Int
+    let week: Int
+    let blockedReason: String?
+    let entries: [PrescribedEntry]
 }
 
 struct WorkoutHistoryExercise: Codable, Identifiable {
@@ -154,6 +211,7 @@ struct WorkoutHistoryItem: Codable, Identifiable {
     let stravaActivityId: String?
     let stravaActivityUrl: String?
     let exercises: [WorkoutHistoryExercise]
+    let personalRecords: [PersonalRecord]
 
     var id: Int { sessionId }
 }

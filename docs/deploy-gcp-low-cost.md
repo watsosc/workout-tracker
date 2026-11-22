@@ -48,6 +48,12 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now workout-api
 ```
 
+Set the login (required for anything reachable from the internet; prompts for username/password):
+
+```bash
+cd /opt/workout-app/backend && sudo -u sean ../.venv/bin/python -m app.manage set-password
+```
+
 Optional Strava integration env (kept off-repo):
 
 ```bash

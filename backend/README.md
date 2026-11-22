@@ -42,6 +42,18 @@ Useful flags:
 - `--max-items 200` (partial sync)
 - `--no-deactivate-missing` (do not deactivate missing source items)
 
+## Sign-in
+
+`python -m app.manage set-password` sets the login (username + password, scrypt-hashed in the DB).
+Until then the API is open. See the root README for details.
+
+## Tests
+
+```bash
+pip install '.[dev]'
+python -m pytest
+```
+
 ## Notes
 
 - Single default user is created automatically (`id=1`).

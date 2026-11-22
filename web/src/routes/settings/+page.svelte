@@ -3,6 +3,8 @@
 	import {
 		connectStrava,
 		deleteActivePlan,
+		fetchAuthStatus,
+		logout,
 		disconnectStrava,
 		fetchActivePlan,
 		fetchDashboard,
@@ -20,6 +22,7 @@
 		StravaConnection
 	} from '$lib/types';
 	import { pushToast } from '$lib/toast';
+
 	import {
 		convertKgToUnit,
 		convertUnitToKg,
@@ -202,7 +205,17 @@
 		);
 	}
 
+	let signedInAs = $state<string | null>(null);
+
+	async function signOut() {
+		await logout();
+		window.location.assign('/login');
+	}
+
 	onMount(() => {
+		fetchAuthStatus()
+			.then((status) => (signedInAs = status.signedIn ? status.username : null))
+			.catch(() => {});
 		weightUnit = getPreferredWeightUnit();
 		const offWeightUnit = onWeightUnitChange((unit) => {
 			weightUnit = unit;
@@ -235,6 +248,12 @@
 		</p>
 	{:else}
 		<p class="subtle">No active plan loaded.</p>
+	{/if}
+	{#if signedInAs}
+		<p class="subtle">
+			Signed in as <strong>{signedInAs}</strong>
+			<button type="button" onclick={signOut}>Sign out</button>
+		</p>
 	{/if}
 </section>
 

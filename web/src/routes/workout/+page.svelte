@@ -1,14 +1,24 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import {
+		cancelWorkout,
 		completeSet,
 		fetchActivePlan,
 		fetchActiveSession,
 		fetchDashboard,
 		finishWorkout,
-		startWorkout
+		startWorkout,
+		uncompleteSet
 	} from '$lib/workout-api';
-	import type { ActivePlan, Dashboard, SessionEntry, SessionSet, WorkoutSession } from '$lib/types';
+	import type {
+		ActivePlan,
+		Dashboard,
+		PersonalRecord,
+		SessionEntry,
+		SessionSet,
+		WorkoutSession
+	} from '$lib/types';
+	import { formatPlates, usesBarbell, warmupSets, type WarmupSet } from '$lib/barbell';
 	import { pushToast } from '$lib/toast';
 	import {
 		displayWeightFromKg,
@@ -49,6 +59,7 @@
 	let amrapPromptInput = $state('');
 	let amrapPromptError = $state('');
 	let amrapPromptResolver: ((value: number | null) => void) | null = null;
+	let exitMenuOpen = $state(false);
 
 	function stopSetTimer() {
 		if (timerHandle) {
@@ -102,6 +113,41 @@
 			}
 		}
 		return null;
+	}
+
+	function lastCompletedSet(session: WorkoutSession | null = activeSession): SessionSet | null {
+		if (!session) return null;
+		let last: SessionSet | null = null;
+		for (const entry of session.entries) {
+			for (const setItem of entry.sets) {
+				if (setItem.completed) last = setItem;
+			}
+		}
+		return last;
+	}
+
+	function displayWeight(weightKg: number): number {
+		return Number(displayWeightFromKg(weightKg, weightUnit));
+	}
+
+	function currentIsBarbell(): boolean {
+		const current = currentPendingSet();
+		return Boolean(current && usesBarbell(current.entry.equipmentType, current.entry.tier));
+	}
+
+	/** Warm-ups are shown before the first working set of a barbell lift. */
+	function currentWarmups(): WarmupSet[] {
+		const current = currentPendingSet();
+		if (!current || !currentIsBarbell()) return [];
+		if (current.entry.sets.some((setItem) => setItem.completed)) return [];
+		return warmupSets(displayWeight(current.weightKg), weightUnit);
+	}
+
+	function describeRecord(pr: PersonalRecord): string {
+		const value = `${displayWeightFromKg(pr.valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
+		return pr.kind === 'WEIGHT'
+			? `${pr.exerciseName} heaviest: ${value} × ${pr.reps}`
+			: `${pr.exerciseName} est. 1RM: ${value}`;
 	}
 
 	function workoutPreviewRows(): WorkoutPreviewRow[] {
@@ -200,6 +246,12 @@
 		pushToast(baseMessage, 'success');
 	}
 
+	function showPersonalRecordToasts(result: WorkoutSession | undefined) {
+		for (const pr of result?.personalRecords ?? []) {
+			pushToast(`🏆 New PR · ${describeRecord(pr)}`, 'success');
+		}
+	}
+
 	function openAmrapPrompt(
 		targetReps: number,
 		mode: 'success' | 'fail'
@@ -259,16 +311,41 @@
 			})
 		);
 
-		const sessionAfter = activeSession;
-		const pendingAfter = currentPendingSet(sessionAfter);
-		if (sessionAfter && !pendingAfter) {
-			const finishResult = await runAction(() => finishWorkout(sessionAfter.id));
-			showFinishAndStravaToast(finishResult, 'Workout finished');
+		// When the last set is logged we stop here (rather than auto-finishing) so a mistaken
+		// final set can still be undone before progression is applied.
+		if (activeSession && !currentPendingSet()) {
 			stopSetTimer();
 			return;
 		}
-
 		if (activeSession) restartSetTimer();
+	}
+
+	async function onUndoLastSet() {
+		const last = lastCompletedSet();
+		if (!last) return;
+		await runAction(() => uncompleteSet(last.id), 'Set undone');
+		if (activeSession && !timerHandle) restartSetTimer();
+	}
+
+	async function onFinishWorkout(message: string) {
+		const session = activeSession;
+		if (!session) return;
+		exitMenuOpen = false;
+		const finishResult = await runAction(() => finishWorkout(session.id));
+		showFinishAndStravaToast(finishResult, message);
+		showPersonalRecordToasts(finishResult);
+		stopSetTimer();
+	}
+
+	async function onDiscardWorkout() {
+		const session = activeSession;
+		if (!session) return;
+		if (!window.confirm('Discard this workout? Logged sets are thrown away and the plan does not advance.')) {
+			return;
+		}
+		exitMenuOpen = false;
+		await runAction(() => cancelWorkout(session.id), 'Workout discarded');
+		stopSetTimer();
 	}
 
 	async function onStartWorkout() {
@@ -276,17 +353,9 @@
 		if (activeSession) restartSetTimer();
 	}
 
-	async function onExitWorkoutEarly() {
-		const session = activeSession;
-		if (!session) return;
-		const finishResult = await runAction(() => finishWorkout(session.id));
-		showFinishAndStravaToast(finishResult, 'Workout ended early');
-		stopSetTimer();
-	}
-
 	function currentSetExerciseName(): string {
 		const current = currentPendingSet();
-		if (!current) return 'Completing workout…';
+		if (!current) return 'All sets complete';
 		return current.entry.exerciseName;
 	}
 
@@ -351,7 +420,12 @@
 
 {#if activeSession}
 	<section class="card session-overlay">
-		<button class="exit-btn" onclick={onExitWorkoutEarly} disabled={loading}>Exit</button>
+		<button class="exit-btn" onclick={() => (exitMenuOpen = true)} disabled={loading}>Exit</button>
+		{#if lastCompletedSet()}
+			<button class="undo-btn" onclick={onUndoLastSet} disabled={loading} title="Undo the last logged set">
+				↶ Undo set
+			</button>
+		{/if}
 		<div class="timer-panel">
 			<div
 				class="segment-clock"
@@ -387,8 +461,32 @@
 			{#if currentSetTargetLine()}
 				<span class="set-target">{currentSetTargetLine()}</span>
 			{/if}
+			{#if currentIsBarbell()}
+				<span class="plate-line">{formatPlates(displayWeight(currentPendingSet()?.weightKg ?? 0), weightUnit)}</span>
+			{/if}
 		</p>
-		<div class="session-actions">
+		{#if currentWarmups().length > 0}
+			<div class="warmups">
+				<span class="warmups-title">Warm-up</span>
+				<ul>
+					{#each currentWarmups() as warmup}
+						<li>
+							<strong>{warmup.weight} {weightUnitLabel(weightUnit)} × {warmup.reps}</strong>
+							<span class="subtle">{formatPlates(warmup.weight, weightUnit)}</span>
+						</li>
+					{/each}
+				</ul>
+			</div>
+		{/if}
+		{#if !currentPendingSet()}
+			<div class="complete-actions">
+				<button type="button" class="primary finish-btn" onclick={() => onFinishWorkout('Workout finished')} disabled={loading}>
+					Finish workout
+				</button>
+				<p class="subtle">Logged a set wrong? Use Undo before finishing.</p>
+			</div>
+		{/if}
+		<div class="session-actions" class:hidden={!currentPendingSet()}>
 			<div class="action-ring success-ring">
 				<button
 					type="button"
@@ -412,6 +510,21 @@
 				</button>
 			</div>
 		</div>
+
+		{#if exitMenuOpen}
+			<div class="amrap-backdrop" role="presentation">
+				<div class="amrap-modal" role="dialog" aria-modal="true" aria-label="Exit workout">
+					<span class="amrap-label">Exit workout</span>
+					<button type="button" class="primary" onclick={() => onFinishWorkout('Workout ended early')} disabled={loading}>
+						Finish now (save &amp; progress)
+					</button>
+					<button type="button" class="danger" onclick={onDiscardWorkout} disabled={loading}>
+						Discard workout
+					</button>
+					<button type="button" onclick={() => (exitMenuOpen = false)} disabled={loading}>Keep going</button>
+				</div>
+			</div>
+		{/if}
 
 		{#if amrapPromptOpen}
 			<div class="amrap-backdrop" role="presentation">
@@ -529,6 +642,63 @@
 		right: 0.9rem;
 		padding: 0.35rem 0.6rem;
 		font-size: 0.85rem;
+	}
+
+	.undo-btn {
+		position: absolute;
+		top: 0.9rem;
+		left: 0.9rem;
+		padding: 0.35rem 0.6rem;
+		font-size: 0.85rem;
+	}
+
+	.plate-line {
+		font-size: 0.95rem;
+		color: #94a3b8;
+	}
+
+	.warmups {
+		width: min(100%, 420px);
+		text-align: left;
+		border: 1px solid #1f2937;
+		border-radius: 10px;
+		padding: 0.55rem 0.8rem;
+	}
+
+	.warmups-title {
+		font-size: 0.8rem;
+		text-transform: uppercase;
+		letter-spacing: 0.05em;
+		color: #94a3b8;
+	}
+
+	.warmups ul {
+		margin: 0.3rem 0 0;
+		padding: 0;
+		list-style: none;
+		display: grid;
+		gap: 0.2rem;
+	}
+
+	.warmups li {
+		display: flex;
+		justify-content: space-between;
+		gap: 0.8rem;
+	}
+
+	.complete-actions {
+		display: grid;
+		gap: 0.4rem;
+		justify-items: center;
+	}
+
+	.finish-btn {
+		font-size: 1.2rem;
+		padding: 0.8rem 1.6rem;
+	}
+
+	.session-actions.hidden {
+		display: none;
 	}
 
 	.timer-panel {
@@ -875,6 +1045,11 @@
 		.exit-btn {
 			top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
 			right: 0.85rem;
+		}
+
+		.undo-btn {
+			top: calc(env(safe-area-inset-top, 0px) + 0.5rem);
+			left: 0.85rem;
 		}
 
 		.hero-identifiers {

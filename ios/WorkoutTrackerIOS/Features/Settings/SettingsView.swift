@@ -89,9 +89,10 @@ final class SettingsViewModel: ObservableObject {
 
 struct SettingsView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var store: OfflineWorkoutStore
     @StateObject private var model = SettingsViewModel()
 
-    private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
+    private var api: WorkoutAPI { settings.api }
 
     var body: some View {
         NavigationStack {
@@ -103,6 +104,59 @@ struct SettingsView: View {
                     Text("Use your hosted backend URL ending in /graphql.")
                         .font(.footnote)
                         .foregroundStyle(.secondary)
+                }
+
+                Section("Account") {
+                    if let username = settings.signedInUsername, settings.sessionToken != nil {
+                        HStack {
+                            Text("Signed in as")
+                            Spacer()
+                            Text(username).foregroundStyle(.secondary)
+                        }
+                        Button("Sign out", role: .destructive) {
+                            Task { await settings.signOut() }
+                        }
+                    } else {
+                        Button("Sign in") { settings.needsSignIn = true }
+                    }
+                }
+
+                Section {
+                    if store.outbox.isEmpty {
+                        Text("Everything is uploaded.")
+                            .foregroundStyle(.secondary)
+                    }
+                    ForEach(store.outbox) { item in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.title).font(.headline)
+                            Text("Saved \(item.createdAt.formatted(date: .abbreviated, time: .shortened))")
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                            if let error = item.lastError {
+                                Text(error)
+                                    .font(.footnote)
+                                    .foregroundStyle(item.needsAttention ? .red : .orange)
+                            }
+                            if item.needsAttention {
+                                HStack {
+                                    Button("Retry") { store.retry(item) }
+                                    Spacer()
+                                    Button("Discard", role: .destructive) { store.discard(item) }
+                                }
+                                .buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                    if !store.outbox.isEmpty {
+                        Button(store.isSyncing ? "Uploading…" : "Sync now") {
+                            Task { await store.syncNow() }
+                        }
+                        .disabled(store.isSyncing)
+                    }
+                } header: {
+                    Text("Uploads")
+                } footer: {
+                    Text("Workouts are saved on this phone first and upload automatically when there's a connection.")
                 }
 
                 Section("Units") {

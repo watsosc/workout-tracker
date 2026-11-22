@@ -18,27 +18,19 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     private var peripheral: CBPeripheral?
     private var heartRateCharacteristic: CBCharacteristic?
 
-    private var activeSessionId: Int?
-    private var api: WorkoutAPI?
-    private var pendingUpload: [[String: Any]] = []
-    private var uploadTask: Task<Void, Never>?
+    /// Receives every sample; the workout store keeps them with the on-device workout.
+    private var onSample: (@MainActor (Int, Date) -> Void)?
+    private var isActive = false
     private var receiveExpiryTask: Task<Void, Never>?
     private var mockTask: Task<Void, Never>?
 
     private let heartRateServiceUUID = CBUUID(string: "180D")
     private let heartRateMeasurementUUID = CBUUID(string: "2A37")
-    private let sourceName = "GARMIN_BLE"
-    private let iso = ISO8601DateFormatter()
 
-    override init() {
-        super.init()
-        iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-    }
-
-    func start(for sessionId: Int, api: WorkoutAPI) {
-        activeSessionId = sessionId
-        self.api = api
-        startUploadLoop()
+    func start(onSample: @escaping @MainActor (Int, Date) -> Void) {
+        self.onSample = onSample
+        guard !isActive else { return }
+        isActive = true
 
         if shouldUseMockHeartRate {
             statusText = "Mock heart-rate stream"
@@ -54,10 +46,8 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     }
 
     func stop() {
-        flushPendingUpload()
-
-        uploadTask?.cancel()
-        uploadTask = nil
+        isActive = false
+        onSample = nil
         receiveExpiryTask?.cancel()
         receiveExpiryTask = nil
         mockTask?.cancel()
@@ -68,22 +58,11 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
         }
         peripheral = nil
         heartRateCharacteristic = nil
-        activeSessionId = nil
 
         latestBpm = nil
         samples = []
         isReceivingData = false
         statusText = "Disconnected"
-    }
-
-    private func startUploadLoop() {
-        uploadTask?.cancel()
-        uploadTask = Task {
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(10))
-                await flushPendingUploadIfNeeded()
-            }
-        }
     }
 
     private var shouldUseMockHeartRate: Bool {
@@ -128,7 +107,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
 
     private func startScanningIfReady() {
         guard let central else { return }
-        guard activeSessionId != nil else { return }
+        guard isActive else { return }
         guard central.state == .poweredOn else {
             statusText = "Bluetooth unavailable"
             return
@@ -145,52 +124,7 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
             samples.removeFirst(samples.count - 120)
         }
 
-        pendingUpload.append([
-            "recordedAt": iso.string(from: date),
-            "bpm": bpm,
-            "source": sourceName
-        ])
-
-        if pendingUpload.count >= 24 {
-            Task { await flushPendingUploadIfNeeded() }
-        }
-    }
-
-    private func flushPendingUpload() {
-        guard let sessionId = activeSessionId, let api else { return }
-        let payload = pendingUpload
-        pendingUpload = []
-        guard !payload.isEmpty else { return }
-
-        Task {
-            do {
-                _ = try await api.appendHeartRateSamples(sessionId: sessionId, samples: payload)
-            } catch {
-                await MainActor.run {
-                    pendingUpload.insert(contentsOf: payload, at: 0)
-                    if pendingUpload.count > 500 {
-                        pendingUpload = Array(pendingUpload.suffix(500))
-                    }
-                }
-            }
-        }
-    }
-
-    private func flushPendingUploadIfNeeded(force: Bool = false) async {
-        guard let sessionId = activeSessionId, let api else { return }
-        guard force || pendingUpload.count >= 10 else { return }
-
-        let payload = pendingUpload
-        pendingUpload = []
-
-        do {
-            _ = try await api.appendHeartRateSamples(sessionId: sessionId, samples: payload)
-        } catch {
-            pendingUpload.insert(contentsOf: payload, at: 0)
-            if pendingUpload.count > 500 {
-                pendingUpload = Array(pendingUpload.suffix(500))
-            }
-        }
+        onSample?(bpm, date)
     }
 
     private func parseHeartRate(from data: Data) -> Int? {

@@ -87,7 +87,22 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(120), unique=True)
+    # scrypt hash; set via `python -m app.manage set-password`. Null = no login configured.
+    password_hash: Mapped[str | None] = mapped_column(String(255), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class AuthSession(Base):
+    __tablename__ = "auth_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    # SHA-256 of the session token; the token itself is never stored.
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime)
+    user_agent: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
 
 class UserPreference(Base):
@@ -297,6 +312,8 @@ class WorkoutSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    # Idempotency key for workouts uploaded by offline-capable clients (see logWorkout).
+    client_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
 
 
 class SessionExerciseEntry(Base):

@@ -112,6 +112,7 @@ const activeSessionQuery = `
 				id
 				exerciseId
 				exerciseName
+				equipmentType
 				plannedSets
 				plannedReps
 				plannedWeightKg
@@ -159,6 +160,13 @@ const historyQuery = `
 				completedSets
 				totalReps
 				topWeightKg
+			}
+			personalRecords {
+				exerciseName
+				kind
+				valueKg
+				reps
+				previousKg
 			}
 		}
 	}
@@ -301,6 +309,30 @@ const finishWorkoutMutation = `
 			stravaActivityId
 			stravaActivityUrl
 			stravaLastError
+			personalRecords {
+				exerciseName
+				kind
+				valueKg
+				reps
+				previousKg
+			}
+		}
+	}
+`;
+
+const cancelWorkoutMutation = `
+	mutation CancelWorkout($sessionId: Int!) {
+		cancelWorkout(sessionId: $sessionId) {
+			ok
+			message
+		}
+	}
+`;
+
+const uncompleteSetMutation = `
+	mutation UncompleteSet($sessionSetId: Int!) {
+		uncompleteSet(sessionSetId: $sessionSetId) {
+			id
 		}
 	}
 `;
@@ -508,6 +540,29 @@ export async function seedPlan(input: {
 	await gql(seedPlanMutation, { ...input, activate: input.activate ?? true });
 }
 
+export type AuthStatus = { authRequired: boolean; signedIn: boolean; username: string | null };
+
+export async function fetchAuthStatus(): Promise<AuthStatus> {
+	const data = await gql<{ authStatus: AuthStatus }>(
+		`query AuthStatus { authStatus { authRequired signedIn username } }`
+	);
+	return data.authStatus;
+}
+
+export async function login(username: string, password: string): Promise<void> {
+	const data = await gql<{ login: MutationResult }>(
+		`mutation Login($username: String!, $password: String!) {
+			login(username: $username, password: $password) { ok message }
+		}`,
+		{ username, password }
+	);
+	ensureOk(data.login);
+}
+
+export async function logout(): Promise<void> {
+	await gql(`mutation Logout { logout { ok message } }`);
+}
+
 export async function fetchPlans(): Promise<PlanSummary[]> {
 	const data = await gql<{ plans: PlanSummary[] }>(plansQuery);
 	return data.plans;
@@ -579,6 +634,15 @@ export async function completeSet(input: {
 export async function finishWorkout(sessionId: number): Promise<WorkoutSession> {
 	const data = await gql<{ finishWorkout: WorkoutSession }>(finishWorkoutMutation, { sessionId });
 	return data.finishWorkout;
+}
+
+export async function cancelWorkout(sessionId: number): Promise<string> {
+	const data = await gql<{ cancelWorkout: MutationResult }>(cancelWorkoutMutation, { sessionId });
+	return ensureOk(data.cancelWorkout);
+}
+
+export async function uncompleteSet(sessionSetId: number): Promise<void> {
+	await gql(uncompleteSetMutation, { sessionSetId });
 }
 
 export async function setExerciseOneRepMax(exerciseId: number, oneRepMaxKg: number): Promise<void> {

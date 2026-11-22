@@ -144,6 +144,24 @@ def _migrate_run_exercise_states_tier(conn) -> None:
     )
 
 
+def _migrate_workout_sessions_client_id(conn) -> None:
+    if not _sqlite_table_exists(conn, "workout_sessions"):
+        return
+    columns = _sqlite_table_columns(conn, "workout_sessions")
+    if "client_id" not in columns:
+        conn.exec_driver_sql("ALTER TABLE workout_sessions ADD COLUMN client_id VARCHAR(64)")
+    conn.exec_driver_sql(
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_workout_sessions_client_id ON workout_sessions (client_id)"
+    )
+
+
+def _migrate_users_password_hash(conn) -> None:
+    if not _sqlite_table_exists(conn, "users"):
+        return
+    if "password_hash" not in _sqlite_table_columns(conn, "users"):
+        conn.exec_driver_sql("ALTER TABLE users ADD COLUMN password_hash VARCHAR(255)")
+
+
 def _migrate_plan_active_flags(conn) -> None:
     """Make `plans.is_active` the source of truth for the active plan.
 
@@ -196,6 +214,8 @@ def apply_sqlite_migrations() -> None:
         _migrate_oauth_connections_provider_username(conn)
         _migrate_run_exercise_states_tier(conn)
         _migrate_plan_active_flags(conn)
+        _migrate_workout_sessions_client_id(conn)
+        _migrate_users_password_hash(conn)
 
 
 @contextmanager

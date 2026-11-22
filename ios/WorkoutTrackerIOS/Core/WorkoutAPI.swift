@@ -3,8 +3,64 @@ import Foundation
 struct WorkoutAPI {
     private let client: GraphQLClient
 
-    init(endpoint: String) {
-        self.client = GraphQLClient(endpoint: endpoint)
+    init(endpoint: String, token: String? = nil, onUnauthorized: (@Sendable () -> Void)? = nil) {
+        self.client = GraphQLClient(endpoint: endpoint, token: token, onUnauthorized: onUnauthorized)
+    }
+
+    struct AuthStatus: Decodable {
+        let authRequired: Bool
+        let signedIn: Bool
+        let username: String?
+    }
+
+    struct SessionToken {
+        let token: String
+        let username: String
+    }
+
+    func fetchAuthStatus() async throws -> AuthStatus {
+        struct Data: Decodable { let authStatus: AuthStatus }
+        return try await client.execute("query { authStatus { authRequired signedIn username } }", dataType: Data.self).authStatus
+    }
+
+    func login(username: String, password: String) async throws -> SessionToken {
+        struct Result: Decodable { let ok: Bool; let message: String; let token: String?; let username: String? }
+        struct Data: Decodable { let login: Result }
+        let result = try await client.execute(
+            "mutation($u: String!, $p: String!) { login(username: $u, password: $p) { ok message token username } }",
+            variables: ["u": username, "p": password],
+            dataType: Data.self
+        ).login
+        guard result.ok, let token = result.token else {
+            throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message])
+        }
+        return SessionToken(token: token, username: result.username ?? username)
+    }
+
+    func logout() async throws {
+        struct Data: Decodable { let logout: MutationResult }
+        _ = try await client.execute("mutation { logout { ok message } }", dataType: Data.self)
+    }
+
+    func fetchWorkoutPrescription() async throws -> WorkoutPrescription? {
+        struct Data: Decodable { let workoutPrescription: WorkoutPrescription? }
+        return try await client.execute(Self.prescriptionQuery, dataType: Data.self).workoutPrescription
+    }
+
+    /// Upload a whole workout recorded on-device. Idempotent on the workout's clientId.
+    func logWorkout(_ workout: LocalWorkout) async throws -> WorkoutSession {
+        struct Data: Decodable { let logWorkout: WorkoutSession }
+        return try await client.execute(
+            Self.logWorkoutMutation,
+            variables: ["input": workout.logWorkoutInput()],
+            dataType: Data.self
+        ).logWorkout
+    }
+
+    func cancelWorkout(sessionId: Int) async throws {
+        struct Data: Decodable { let cancelWorkout: MutationResult }
+        // ok=false here only means there was nothing left to cancel; either way we're done.
+        _ = try await client.execute(Self.cancelWorkoutMutation, variables: ["sessionId": sessionId], dataType: Data.self)
     }
 
     func fetchDashboard() async throws -> Dashboard {
@@ -63,41 +119,6 @@ struct WorkoutAPI {
         return try await client.execute(Self.stravaConnectionQuery, dataType: Data.self).stravaConnection
     }
 
-    func appendHeartRateSamples(sessionId: Int, samples: [[String: Any]]) async throws -> Int {
-        struct Data: Decodable { let appendHeartRateSamples: HeartRateIngestResult }
-        let result = try await client.execute(
-            Self.appendHeartRateSamplesMutation,
-            variables: ["sessionId": sessionId, "samples": samples],
-            dataType: Data.self
-        ).appendHeartRateSamples
-        guard result.ok else {
-            throw NSError(domain: "WorkoutAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: result.message])
-        }
-        return result.insertedCount
-    }
-
-    func startWorkout() async throws {
-        struct Data: Decodable { let startWorkout: IdOnly }
-        _ = try await client.execute(Self.startWorkoutMutation, dataType: Data.self)
-    }
-
-    func completeSet(sessionSetId: Int, repsCompleted: Int, weightKg: Double?, durationSeconds: Int?) async throws {
-        struct Data: Decodable { let completeSet: CompleteSetResult }
-        var vars: [String: Any] = [
-            "sessionSetId": sessionSetId,
-            "repsCompleted": repsCompleted
-        ]
-        if let weightKg { vars["weightKg"] = weightKg }
-        if let durationSeconds { vars["durationSeconds"] = durationSeconds }
-
-        _ = try await client.execute(Self.completeSetMutation, variables: vars, dataType: Data.self)
-    }
-
-    func finishWorkout(sessionId: Int) async throws -> WorkoutSession {
-        struct Data: Decodable { let finishWorkout: WorkoutSession }
-        return try await client.execute(Self.finishWorkoutMutation, variables: ["sessionId": sessionId], dataType: Data.self).finishWorkout
-    }
-
     func setExerciseOneRepMax(exerciseId: Int, oneRepMaxKg: Double) async throws {
         struct Data: Decodable { let setExerciseOneRepMax: MutationResult }
         let result = try await client.execute(Self.setOneRepMaxMutation, variables: ["exerciseId": exerciseId, "oneRepMaxKg": oneRepMaxKg], dataType: Data.self).setExerciseOneRepMax
@@ -137,20 +158,6 @@ struct WorkoutAPI {
         let message: String
     }
 
-    private struct HeartRateIngestResult: Decodable {
-        let ok: Bool
-        let message: String
-        let insertedCount: Int
-    }
-
-    private struct IdOnly: Decodable {
-        let id: Int
-    }
-
-    private struct CompleteSetResult: Decodable {
-        let id: Int
-        let completed: Bool
-    }
 }
 
 private extension WorkoutAPI {
@@ -248,6 +255,77 @@ private extension WorkoutAPI {
     }
     """
 
+    static let prescriptionQuery = """
+    query WorkoutPrescription {
+        workoutPrescription {
+            planId
+            planName
+            planWorkoutId
+            workoutName
+            sequenceIndex
+            week
+            blockedReason
+            entries {
+                planWorkoutExerciseId
+                exerciseId
+                exerciseName
+                plannedSets
+                plannedReps
+                plannedWeightKg
+                progressionProtocol
+                tier
+                equipmentType
+                expectedRestSeconds
+                sets { setIndex targetReps isAmrap weightKg }
+            }
+        }
+    }
+    """
+
+    static let logWorkoutMutation = """
+    mutation LogWorkout($input: LogWorkoutInput!) {
+        logWorkout(input: $input) {
+            id
+            status
+            startedAt
+            finishedAt
+            heartRateSampleCount
+            avgHeartRateBpm
+            maxHeartRateBpm
+            stravaExportStatus
+            stravaActivityId
+            stravaActivityUrl
+            stravaLastError
+            planWorkoutId
+            planWorkoutName
+            personalRecords { exerciseName kind valueKg reps previousKg }
+            entries {
+                id
+                planWorkoutExerciseId
+                equipmentType
+                exerciseId
+                exerciseName
+                plannedSets
+                plannedReps
+                plannedWeightKg
+                progressionProtocol
+                tier
+                expectedRestSeconds
+                sets { id setIndex targetReps isAmrap repsCompleted weightKg durationSeconds completed completedAt }
+            }
+        }
+    }
+    """
+
+    static let cancelWorkoutMutation = """
+    mutation CancelWorkout($sessionId: Int!) {
+        cancelWorkout(sessionId: $sessionId) {
+            ok
+            message
+        }
+    }
+    """
+
     static let activeSessionQuery = """
     query ActiveSession {
         activeWorkoutSession {
@@ -262,8 +340,13 @@ private extension WorkoutAPI {
             stravaActivityId
             stravaActivityUrl
             stravaLastError
+            planWorkoutId
+            planWorkoutName
+            personalRecords { exerciseName kind valueKg reps previousKg }
             entries {
                 id
+                planWorkoutExerciseId
+                equipmentType
                 exerciseId
                 exerciseName
                 plannedSets
@@ -314,6 +397,7 @@ private extension WorkoutAPI {
                 totalReps
                 topWeightKg
             }
+            personalRecords { exerciseName kind valueKg reps previousKg }
         }
     }
     """
@@ -350,71 +434,6 @@ private extension WorkoutAPI {
             scope
             expiresAt
             autoSendOnFinish
-        }
-    }
-    """
-
-    static let appendHeartRateSamplesMutation = """
-    mutation AppendHeartRateSamples($sessionId: Int!, $samples: [HeartRateSampleInput!]!) {
-        appendHeartRateSamples(sessionId: $sessionId, samples: $samples) {
-            ok
-            message
-            insertedCount
-        }
-    }
-    """
-
-    static let startWorkoutMutation = """
-    mutation StartWorkout {
-        startWorkout { id }
-    }
-    """
-
-    static let completeSetMutation = """
-    mutation CompleteSet($sessionSetId: Int!, $repsCompleted: Int!, $weightKg: Float, $durationSeconds: Int) {
-        completeSet(sessionSetId: $sessionSetId, repsCompleted: $repsCompleted, weightKg: $weightKg, durationSeconds: $durationSeconds) {
-            id
-            completed
-        }
-    }
-    """
-
-    static let finishWorkoutMutation = """
-    mutation FinishWorkout($sessionId: Int!) {
-        finishWorkout(sessionId: $sessionId) {
-            id
-            status
-            startedAt
-            finishedAt
-            heartRateSampleCount
-            avgHeartRateBpm
-            maxHeartRateBpm
-            stravaExportStatus
-            stravaActivityId
-            stravaActivityUrl
-            stravaLastError
-            entries {
-                id
-                exerciseId
-                exerciseName
-                plannedSets
-                plannedReps
-                plannedWeightKg
-                progressionProtocol
-                tier
-                expectedRestSeconds
-                sets {
-                    id
-                    setIndex
-                    targetReps
-                    isAmrap
-                    repsCompleted
-                    weightKg
-                    durationSeconds
-                    completed
-                    completedAt
-                }
-            }
         }
     }
     """

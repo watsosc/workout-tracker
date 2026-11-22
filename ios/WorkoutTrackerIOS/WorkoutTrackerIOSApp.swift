@@ -2,13 +2,46 @@ import SwiftUI
 
 @main
 struct WorkoutTrackerIOSApp: App {
-    @StateObject private var settings = AppSettings()
+    @StateObject private var settings: AppSettings
+    @StateObject private var workoutStore: OfflineWorkoutStore
+    @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        let settings = AppSettings()
+        let store = OfflineWorkoutStore()
+        // Built on demand so endpoint/token changes in Settings apply to queued uploads.
+        store.apiProvider = { settings.api }
+        _settings = StateObject(wrappedValue: settings)
+        _workoutStore = StateObject(wrappedValue: store)
+        RestTimerNotifier.shared.install()
+    }
 
     var body: some Scene {
         WindowGroup {
             RootTabView()
                 .environmentObject(settings)
+                .environmentObject(workoutStore)
                 .preferredColorScheme(.dark)
+                .sheet(isPresented: $settings.needsSignIn) {
+                    SignInView()
+                        .environmentObject(settings)
+                        .environmentObject(workoutStore)
+                        .interactiveDismissDisabled()
+                }
+                .task { await settings.checkAuthStatus() }
+        }
+        .onChange(of: scenePhase) { phase in
+            switch phase {
+            case .active:
+                Task {
+                    await settings.checkAuthStatus()
+                    await workoutStore.syncNow()
+                }
+            case .background:
+                workoutStore.save()
+            default:
+                break
+            }
         }
     }
 }

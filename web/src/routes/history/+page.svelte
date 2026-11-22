@@ -27,6 +27,14 @@
 	let heartRateBySession = $state<Record<number, HeartRateSample[]>>({});
 	let heartRateLoadingBySession = $state<Record<number, boolean>>({});
 
+	function prLabel(item: WorkoutHistoryItem, exerciseName: string): string | null {
+		const records = item.personalRecords.filter((pr) => pr.exerciseName === exerciseName);
+		if (records.length === 0) return null;
+		return records
+			.map((pr) => (pr.kind === 'WEIGHT' ? 'Heaviest' : 'Est. 1RM ' + loadLabel(pr.valueKg)))
+			.join(' · ');
+	}
+
 	function volumeLabel(valueKg: number): string {
 		return `${displayWeightFromKg(valueKg, weightUnit)} ${weightUnitLabel(weightUnit)}`;
 	}
@@ -198,7 +206,12 @@
 							<tbody>
 								{#each item.exercises as exercise}
 									<tr>
-										<td>{exercise.exerciseName}</td>
+										<td>
+											{exercise.exerciseName}
+											{#if prLabel(item, exercise.exerciseName)}
+												<span class="pr-badge" title={prLabel(item, exercise.exerciseName)}>🏆 PR</span>
+											{/if}
+										</td>
 										<td>{exercise.completedSets}</td>
 										<td>{exercise.totalReps}</td>
 										<td>{loadLabel(exercise.topWeightKg)}</td>
@@ -214,6 +227,16 @@
 </section>
 
 <style>
+	.pr-badge {
+		margin-left: 0.35rem;
+		font-size: 0.72rem;
+		padding: 0.05rem 0.4rem;
+		border-radius: 999px;
+		border: 1px solid #f59e0b;
+		color: #f59e0b;
+		white-space: nowrap;
+	}
+
 	.history-card {
 		display: grid;
 		gap: 0.75rem;

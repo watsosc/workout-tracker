@@ -81,9 +81,28 @@ export type SessionSet = {
 	completedAt: string | null;
 };
 
+export type EquipmentType =
+	| 'BARBELL'
+	| 'DUMBBELL'
+	| 'MACHINE'
+	| 'CABLE'
+	| 'BODYWEIGHT'
+	| 'KETTLEBELL'
+	| 'BAND'
+	| 'OTHER';
+
+export type PersonalRecord = {
+	exerciseName: string;
+	kind: 'WEIGHT' | 'ESTIMATED_1RM';
+	valueKg: number;
+	reps: number;
+	previousKg: number;
+};
+
 export type SessionEntry = {
 	id: number;
 	exerciseId: number;
+	equipmentType: EquipmentType | null;
 	exerciseName: string;
 	plannedSets: number;
 	plannedReps: number;
@@ -107,6 +126,7 @@ export type WorkoutSession = {
 	stravaActivityUrl: string | null;
 	stravaLastError: string | null;
 	entries: SessionEntry[];
+	personalRecords?: PersonalRecord[];
 };
 
 export type WorkoutHistoryExercise = {
@@ -137,6 +157,7 @@ export type WorkoutHistoryItem = {
 	stravaActivityId: string | null;
 	stravaActivityUrl: string | null;
 	exercises: WorkoutHistoryExercise[];
+	personalRecords: PersonalRecord[];
 };
 
 export type ExerciseProgressPoint = {

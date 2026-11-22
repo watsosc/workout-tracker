@@ -53,9 +53,10 @@ final class HistoryViewModel: ObservableObject {
 
 struct HistoryView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var store: OfflineWorkoutStore
     @StateObject private var model = HistoryViewModel()
 
-    private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
+    private var api: WorkoutAPI { settings.api }
 
     var body: some View {
         NavigationStack {
@@ -67,6 +68,17 @@ struct HistoryView: View {
                 }
                 if !model.infoMessage.isEmpty {
                     Text(model.infoMessage).foregroundStyle(.green)
+                }
+
+                let pendingWorkouts = store.outbox.filter {
+                    if case .logWorkout = $0.kind { return true } else { return false }
+                }
+                if !pendingWorkouts.isEmpty {
+                    Section("Waiting to upload") {
+                        ForEach(pendingWorkouts) { item in
+                            Label(item.title, systemImage: "icloud.and.arrow.up")
+                        }
+                    }
                 }
 
                 if !model.loading && model.history.isEmpty {
@@ -103,6 +115,12 @@ struct HistoryView: View {
                             }
                         }
 
+                        ForEach(item.personalRecords) { pr in
+                            Text("🏆 \(pr.describe(unit: settings.weightUnit))")
+                                .font(.footnote)
+                                .foregroundStyle(.orange)
+                        }
+
                         ForEach(item.exercises) { exercise in
                             HStack {
                                 Text(exercise.exerciseName)
@@ -116,6 +134,10 @@ struct HistoryView: View {
             }
             .navigationTitle("History")
             .task { await model.load(using: api) }
+            .refreshable { await model.load(using: api) }
+            .onChange(of: store.outbox.count) { _ in
+                Task { await model.load(using: api) }
+            }
         }
     }
 }

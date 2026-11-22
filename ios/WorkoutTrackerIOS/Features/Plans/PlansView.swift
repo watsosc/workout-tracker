@@ -45,10 +45,11 @@ final class PlansViewModel: ObservableObject {
 
 struct PlansView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var store: OfflineWorkoutStore
     @StateObject private var model = PlansViewModel()
     @State private var planPendingRestart: PlanSummary?
 
-    private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
+    private var api: WorkoutAPI { settings.api }
 
     var body: some View {
         List {
@@ -57,6 +58,12 @@ struct PlansView: View {
             }
             if !model.infoMessage.isEmpty {
                 Section { Text(model.infoMessage).foregroundStyle(.green) }
+            }
+            if store.activeWorkout != nil {
+                Section {
+                    Text("Finish or discard the workout in progress before switching plans.")
+                        .foregroundStyle(.orange)
+                }
             }
 
             Section {
@@ -143,7 +150,7 @@ struct PlansView: View {
                 .buttonStyle(.borderedProminent)
             }
         }
-        .disabled(model.loading)
+        .disabled(model.loading || store.activeWorkout != nil)
         .padding(.vertical, 2)
     }
 

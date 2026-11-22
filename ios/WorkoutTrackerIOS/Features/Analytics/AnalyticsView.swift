@@ -45,7 +45,7 @@ struct AnalyticsView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var model = AnalyticsViewModel()
 
-    private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
+    private var api: WorkoutAPI { settings.api }
 
     var body: some View {
         NavigationStack {

@@ -1,160 +1,143 @@
 import SwiftUI
 import Charts
 
+/// Drives the Workout tab. The workout itself lives in `OfflineWorkoutStore` (on-device, persisted)
+/// and is uploaded in one go when finished, so logging works with no signal.
 @MainActor
 final class WorkoutViewModel: ObservableObject {
-    struct PendingSet {
-        let entry: SessionEntry
-        let setItem: SessionSet
-        let targetReps: Int
-        let weightKg: Double
-    }
-
     @Published var loading = false
     @Published var errorMessage = ""
     @Published var infoMessage = ""
-    @Published var activePlan: ActivePlan?
-    @Published var dashboard: Dashboard?
-    @Published var activeSession: WorkoutSession?
-    @Published var timerSeconds = 0
+    @Published var now = Date()
 
-    private var timerTask: Task<Void, Never>?
+    private var tickTask: Task<Void, Never>?
 
-    deinit { timerTask?.cancel() }
+    deinit { tickTask?.cancel() }
 
-    func load(using api: WorkoutAPI) async {
+    func load(api: WorkoutAPI, store: OfflineWorkoutStore) async {
         loading = true
         errorMessage = ""
+        defer { loading = false }
+
+        await store.syncNow()
+        // The server can't know what's next until every finished workout has been uploaded.
+        guard !store.hasPendingWorkoutUploads else { return }
+
         do {
-            async let plan = api.fetchActivePlan()
-            async let dash = api.fetchDashboard()
-            async let session = api.fetchActiveSession()
-            activePlan = try await plan
-            dashboard = try await dash
-            activeSession = try await session
-            syncTimer()
+            async let rx = api.fetchWorkoutPrescription()
+            async let serverSession = api.fetchActiveSession()
+            let (prescription, session) = try await (rx, serverSession)
+            store.cachePrescription(prescription)
+            if store.activeWorkout == nil, let session {
+                store.resumeServerWorkout(session, planName: prescription?.planName ?? "")
+                infoMessage = "Resumed the workout that was started on another device"
+            }
+        } catch GraphQLClientError.unauthorized {
+            errorMessage = GraphQLClientError.unauthorized.localizedDescription
         } catch {
-            errorMessage = error.localizedDescription
-        }
-        loading = false
-    }
-
-    func startWorkout(using api: WorkoutAPI) async {
-        await run(api: api, success: "Workout started") {
-            try await api.startWorkout()
-        }
-        if activeSession != nil { startTimer() }
-    }
-
-    func endWorkout(using api: WorkoutAPI) async {
-        guard let session = activeSession else { return }
-        do {
-            let finished = try await api.finishWorkout(sessionId: session.id)
-            infoMessage = finished.stravaExportStatus == .sent ? "Workout finished and sent to Strava" : "Workout finished"
-            await load(using: api)
-            stopTimer()
-        } catch {
-            errorMessage = error.localizedDescription
+            // Offline or flaky signal: carry on with the cached plan.
+            if !OfflineWorkoutStore.isTransient(error) { errorMessage = error.localizedDescription }
         }
     }
 
-    func submitCurrentSet(using api: WorkoutAPI, mode: SetOutcome, repsOverride: Int?) async {
-        guard let pending = pendingSet() else { return }
-        var reps = pending.targetReps
+    func startWorkout(api: WorkoutAPI, store: OfflineWorkoutStore) async {
+        errorMessage = ""
+        infoMessage = ""
+        // Prefer the prescription cached when the tab loaded: starting must not wait on a weak signal.
+        if store.cachedPrescription == nil, !store.hasPendingWorkoutUploads {
+            loading = true
+            if let fresh = try? await api.fetchWorkoutPrescription() { store.cachePrescription(fresh) }
+            loading = false
+        }
 
+        guard let rx = store.cachedPrescription else {
+            if store.hasPendingWorkoutUploads {
+                errorMessage = "Your last workout is still waiting to upload. The next one will be ready once it syncs."
+            } else if store.noActivePlan {
+                errorMessage = "No active plan. Pick one in Settings → Plans."
+            } else {
+                errorMessage = "Connect to the internet once to download your plan."
+            }
+            return
+        }
+        if let reason = rx.blockedReason {
+            errorMessage = reason
+            return
+        }
+        RestTimerNotifier.shared.requestAuthorizationIfNeeded()
+        store.startWorkout(from: rx)
+    }
+
+    func submitCurrentSet(store: OfflineWorkoutStore, mode: SetOutcome, repsOverride: Int?) {
+        guard let workout = store.activeWorkout, let position = workout.pendingSetPosition() else { return }
+        let entry = workout.entries[position.entryIndex]
+        let set = entry.sets[position.setIndex]
+        let target = set.targetReps ?? entry.plannedReps
+
+        var reps = target
         if let repsOverride {
             reps = repsOverride
-        } else if pending.setItem.isAmrap {
+        } else if set.isAmrap {
             return
         } else if mode == .failed {
-            reps = max(0, pending.targetReps - 1)
+            reps = max(0, target - 1)
         }
 
-        do {
-            try await api.completeSet(
-                sessionSetId: pending.setItem.id,
-                repsCompleted: reps,
-                weightKg: pending.weightKg,
-                durationSeconds: max(0, timerSeconds)
-            )
-            await load(using: api)
-            if pendingSet() == nil, let session = activeSession {
-                _ = try await api.finishWorkout(sessionId: session.id)
-                await load(using: api)
-                infoMessage = "Workout finished"
-                stopTimer()
-            } else {
-                startTimer()
-            }
-        } catch {
-            errorMessage = error.localizedDescription
-        }
+        store.completeSet(at: position, reps: reps)
+        now = Date()
+        scheduleRestNotification(store: store)
     }
 
-    func pendingSet() -> PendingSet? {
-        guard let session = activeSession else { return nil }
-        for entry in session.entries {
-            for setItem in entry.sets where !setItem.completed {
-                return PendingSet(
-                    entry: entry,
-                    setItem: setItem,
-                    targetReps: setItem.targetReps ?? entry.plannedReps,
-                    weightKg: setItem.weightKg ?? entry.plannedWeightKg
-                )
-            }
-        }
-        return nil
+    func undoLastSet(store: OfflineWorkoutStore) {
+        store.undoLastSet()
+        RestTimerNotifier.shared.cancel()
+        now = Date()
     }
 
-    func upcomingWorkoutName() -> String? {
-        guard let activePlan, !activePlan.workouts.isEmpty else { return nil }
-        let index = min(max(activePlan.currentWorkoutIndex, 0), activePlan.workouts.count - 1)
-        return activePlan.workouts[index].name
+    func finishWorkout(store: OfflineWorkoutStore) {
+        RestTimerNotifier.shared.cancel()
+        store.finishActiveWorkout()
+        infoMessage = store.isOnline ? "Workout saved · uploading…" : "Workout saved on this phone · it will upload when you're back online"
     }
 
-    func workoutPreviewRows() -> [ActivePlanExercise] {
-        guard let activePlan, !activePlan.workouts.isEmpty else { return [] }
-        let index = min(max(activePlan.currentWorkoutIndex, 0), activePlan.workouts.count - 1)
-        return activePlan.workouts[index].exercises
+    func discardWorkout(store: OfflineWorkoutStore) {
+        RestTimerNotifier.shared.cancel()
+        store.discardActiveWorkout()
+        infoMessage = "Workout discarded"
     }
 
-    private func run(api: WorkoutAPI, success: String, action: () async throws -> Void) async {
-        loading = true
-        errorMessage = ""
-        do {
-            try await action()
-            await load(using: api)
-            infoMessage = success
-        } catch {
-            errorMessage = error.localizedDescription
-        }
-        loading = false
+    func restSeconds(store: OfflineWorkoutStore) -> Int {
+        guard let workout = store.activeWorkout else { return 0 }
+        return max(0, Int(now.timeIntervalSince(workout.lastSetCompletedAt ?? workout.startedAt)))
     }
 
-    private func syncTimer() {
-        if activeSession == nil {
-            stopTimer()
-            timerSeconds = 0
-        } else if timerTask == nil {
-            startTimer()
-        }
-    }
-
-    private func startTimer() {
-        timerTask?.cancel()
-        timerSeconds = 0
-        timerTask = Task {
+    func startTicking() {
+        guard tickTask == nil else { return }
+        tickTask = Task { [weak self] in
             while !Task.isCancelled {
+                self?.now = Date()
                 try? await Task.sleep(for: .seconds(1))
-                guard !Task.isCancelled else { return }
-                timerSeconds += 1
             }
         }
     }
 
-    private func stopTimer() {
-        timerTask?.cancel()
-        timerTask = nil
+    func stopTicking() {
+        tickTask?.cancel()
+        tickTask = nil
+    }
+
+    private func scheduleRestNotification(store: OfflineWorkoutStore) {
+        guard let workout = store.activeWorkout, let next = workout.pendingSetPosition() else {
+            RestTimerNotifier.shared.cancel()
+            return
+        }
+        let entry = workout.entries[next.entryIndex]
+        let set = entry.sets[next.setIndex]
+        let reps = "\(set.targetReps ?? entry.plannedReps)\(set.isAmrap ? "+" : "")"
+        RestTimerNotifier.shared.scheduleRestEnd(
+            after: entry.restTargetSeconds,
+            nextSet: "\(entry.exerciseName) · set \(set.setIndex) · \(reps) reps"
+        )
     }
 }
 
@@ -165,15 +148,18 @@ enum SetOutcome {
 
 struct WorkoutView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var store: OfflineWorkoutStore
     @StateObject private var model = WorkoutViewModel()
+    @StateObject private var heartRate = HeartRateBluetoothManager()
     @State private var showingRepsEntry = false
     @State private var repsEntryValue = ""
     @State private var repsEntryMode: SetOutcome = .success
     @State private var repsEntryTarget = 0
     @State private var repsEntryIsAmrap = false
-    @StateObject private var heartRate = HeartRateBluetoothManager()
+    @State private var confirmingDiscard = false
 
-    private var api: WorkoutAPI { WorkoutAPI(endpoint: settings.graphqlEndpoint) }
+    private var api: WorkoutAPI { settings.api }
+    private var unit: WeightUnit { settings.weightUnit }
 
     var body: some View {
         NavigationStack {
@@ -187,6 +173,8 @@ struct WorkoutView: View {
                             ProgressView()
                         }
 
+                        statusBanners
+
                         if !model.errorMessage.isEmpty {
                             Text(model.errorMessage)
                                 .foregroundStyle(.red)
@@ -197,8 +185,8 @@ struct WorkoutView: View {
                                 .foregroundStyle(.green)
                         }
 
-                        if let session = model.activeSession {
-                            activeSessionPanel(session)
+                        if let workout = store.activeWorkout {
+                            activeWorkoutPanel(workout)
                         } else {
                             startPanel
                         }
@@ -206,23 +194,25 @@ struct WorkoutView: View {
                     .padding()
                 }
 
-                if model.activeSession != nil {
+                if store.activeWorkout != nil {
                     bluetoothIndicator
                         .padding(.trailing, 16)
                         .padding(.bottom, 16)
                 }
             }
             .navigationTitle("Workout")
-            .task { await model.load(using: api) }
-            .onChange(of: model.activeSession?.id) { sessionId in
-                guard let sessionId else {
-                    heartRate.stop()
-                    return
-                }
-                heartRate.start(for: sessionId, api: api)
+            .task {
+                await model.load(api: api, store: store)
+                syncHeartRateAndTicker()
             }
-            .onDisappear {
-                heartRate.stop()
+            .onChange(of: store.activeWorkout?.clientId) { _ in
+                syncHeartRateAndTicker()
+            }
+            .confirmationDialog("Discard this workout?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
+                Button("Discard workout", role: .destructive) { model.discardWorkout(store: store) }
+                Button("Keep going", role: .cancel) {}
+            } message: {
+                Text("Logged sets are thrown away and the plan does not advance.")
             }
             .sheet(isPresented: $showingRepsEntry) {
                 RepsEntrySheet(
@@ -239,9 +229,7 @@ struct WorkoutView: View {
                         if repsEntryMode == .success && repsEntryIsAmrap && reps < repsEntryTarget { return }
                         if repsEntryMode == .failed && reps >= repsEntryTarget { return }
                         showingRepsEntry = false
-                        Task {
-                            await model.submitCurrentSet(using: api, mode: repsEntryMode, repsOverride: reps)
-                        }
+                        model.submitCurrentSet(store: store, mode: repsEntryMode, repsOverride: reps)
                     }
                 )
                 .presentationDetents([.height(230)])
@@ -249,84 +237,240 @@ struct WorkoutView: View {
         }
     }
 
+    private func syncHeartRateAndTicker() {
+        if store.activeWorkout != nil {
+            let workoutStore = store
+            heartRate.start { [weak workoutStore] bpm, date in
+                workoutStore?.appendHeartRate(bpm: bpm, at: date)
+            }
+            model.startTicking()
+        } else {
+            heartRate.stop()
+            model.stopTicking()
+        }
+    }
+
+    // MARK: Banners
+
     @ViewBuilder
-    private func activeSessionPanel(_ session: WorkoutSession) -> some View {
-        let pending = model.pendingSet()
+    private var statusBanners: some View {
+        if !store.isOnline {
+            Label(
+                store.activeWorkout != nil
+                    ? "Offline — this workout is saved on your phone and uploads when you're back online."
+                    : "Offline — using your plan as of \(cachedAgeText).",
+                systemImage: "wifi.slash"
+            )
+            .font(.footnote)
+            .foregroundStyle(.orange)
+        }
+
+        if store.pendingUploadCount > 0 {
+            HStack {
+                Label(
+                    store.outbox.contains(where: \.needsAttention)
+                        ? "An upload needs attention (Settings → Uploads)"
+                        : "\(store.pendingUploadCount) waiting to upload",
+                    systemImage: "icloud.and.arrow.up"
+                )
+                .font(.footnote)
+                Spacer()
+                if store.isSyncing {
+                    ProgressView()
+                } else {
+                    Button("Sync now") { Task { await store.syncNow() } }
+                        .font(.footnote)
+                }
+            }
+            .padding(10)
+            .background(Color.orange.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+        }
+
+        if let upload = store.lastUpload {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack {
+                    Text(upload.wasQueued ? "Uploaded \(upload.workoutName)" : "\(upload.workoutName) saved")
+                        .font(.footnote.weight(.semibold))
+                    Spacer()
+                    Button {
+                        store.lastUpload = nil
+                    } label: {
+                        Image(systemName: "xmark").font(.caption)
+                    }
+                    .buttonStyle(.plain)
+                }
+                ForEach(upload.personalRecords) { pr in
+                    Text("🏆 New PR · \(pr.describe(unit: unit))")
+                        .font(.footnote)
+                }
+                if upload.stravaStatus == .sent {
+                    Text("Sent to Strava").font(.footnote).foregroundStyle(.secondary)
+                } else if upload.stravaStatus == .failed {
+                    Text("Strava upload failed — retry from History").font(.footnote).foregroundStyle(.red)
+                }
+            }
+            .padding(10)
+            .background(Color.green.opacity(0.15), in: RoundedRectangle(cornerRadius: 10))
+        }
+    }
+
+    private var cachedAgeText: String {
+        guard let at = store.prescriptionFetchedAt else { return "the last sync" }
+        return at.formatted(.relative(presentation: .named))
+    }
+
+    // MARK: Active workout
+
+    @ViewBuilder
+    private func activeWorkoutPanel(_ workout: LocalWorkout) -> some View {
+        let pending = workout.pendingSetPosition()
+
+        HStack {
+            Text(workout.workoutName).font(.headline)
+            Spacer()
+            if workout.lastCompletedPosition() != nil {
+                Button {
+                    model.undoLastSet(store: store)
+                } label: {
+                    Label("Undo set", systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(.bordered)
+            }
+        }
 
         if let pending {
+            let entry = workout.entries[pending.entryIndex]
+            let set = entry.sets[pending.setIndex]
+            let targetReps = set.targetReps ?? entry.plannedReps
+            let isBarbell = BarbellMath.usesBarbell(equipment: entry.equipmentType, tier: entry.tier)
+            let displayWeight = Double(WeightMath.displayWeightFromKg(set.weightKg, unit: unit)) ?? 0
+
             VStack(alignment: .leading, spacing: 14) {
-                timerPanel(for: pending)
+                timerPanel(restTarget: entry.restTargetSeconds)
 
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(pending.entry.exerciseName)
+                    Text(entry.exerciseName)
                         .font(.title2)
                         .bold()
-                    Text("\(pending.targetReps)\(pending.setItem.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(pending.weightKg, unit: settings.weightUnit)) \(settings.weightUnit.label)")
+                    Text("Set \(set.setIndex) of \(entry.sets.count) · \(targetReps)\(set.isAmrap ? "+" : "") reps @ \(WeightMath.displayWeightFromKg(set.weightKg, unit: unit)) \(unit.label)")
                         .foregroundStyle(.secondary)
+                    if isBarbell {
+                        Text(BarbellMath.formatPlates(total: displayWeight, unit: unit))
+                            .font(.footnote)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if isBarbell, !entry.sets.contains(where: \.completed) {
+                    warmupPanel(BarbellMath.warmupSets(working: displayWeight, unit: unit))
                 }
 
                 heartRatePanel
 
-                outcomeSelector(for: pending)
+                outcomeSelector(targetReps: targetReps, isAmrap: set.isAmrap)
             }
             .padding(12)
             .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 14))
         } else {
-            Text("All sets complete. Finishing workout…")
+            VStack(alignment: .leading, spacing: 10) {
+                Text("All sets complete 🎉").font(.title3.bold())
+                Text("Logged one wrong? Undo it before finishing.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                Button("Finish workout") { model.finishWorkout(store: store) }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .frame(maxWidth: .infinity)
+            }
+            .padding(12)
+            .background(Color.black.opacity(0.24), in: RoundedRectangle(cornerRadius: 14))
         }
 
         Divider()
-        ForEach(session.entries) { entry in
+        ForEach(workout.entries) { entry in
             HStack(alignment: .center, spacing: 10) {
                 Text(entry.exerciseName)
                     .bold()
                 Spacer()
-                Text("\(entry.plannedSets)x\(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: settings.weightUnit)) \(settings.weightUnit.label)")
+                Text("\(entry.sets.filter(\.completed).count)/\(entry.sets.count) · \(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: unit)) \(unit.label)")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 6)
         }
 
-        if pending != nil {
-            Button("End workout") {
-                Task { await model.endWorkout(using: api) }
+        HStack(spacing: 10) {
+            if pending != nil {
+                Button("Finish now") { model.finishWorkout(store: store) }
+                    .buttonStyle(.bordered)
+                    .frame(maxWidth: .infinity)
             }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 12)
-            .foregroundStyle(.red)
-            .buttonStyle(.bordered)
+            Button("Discard", role: .destructive) { confirmingDiscard = true }
+                .buttonStyle(.bordered)
+                .frame(maxWidth: .infinity)
         }
+        .padding(.vertical, 12)
     }
 
-    private var startPanel: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            if let name = model.upcomingWorkoutName() {
-                Text("Next workout: \(name)")
-                    .font(.headline)
-            }
-
-            ForEach(model.workoutPreviewRows()) { exercise in
+    private func warmupPanel(_ sets: [WarmupSet]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("WARM-UP")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
+            ForEach(sets, id: \.self) { warmup in
                 HStack {
-                    Text(exercise.exerciseName)
+                    Text("\(BarbellMath.format(warmup.weight)) \(unit.label) × \(warmup.reps)").bold()
                     Spacer()
-                    Text("\(exercise.sets)x\(exercise.reps) @ \(WeightMath.displayWeightFromKg(exercise.targetWeightKg, unit: settings.weightUnit))")
+                    Text(BarbellMath.formatPlates(total: warmup.weight, unit: unit))
+                        .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
             }
+        }
+        .padding(10)
+        .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+    }
 
-            Button("Start workout") {
-                Task { await model.startWorkout(using: api) }
-            }
-            .buttonStyle(.borderedProminent)
-            .disabled(model.loading || model.activePlan == nil)
+    // MARK: Start panel
 
-            if model.activePlan == nil {
+    private var startPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            if let rx = store.cachedPrescription {
+                Text("Next workout: \(rx.workoutName)")
+                    .font(.headline)
+                Text("\(rx.planName) · week \(rx.week)")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                ForEach(rx.entries) { entry in
+                    HStack {
+                        Text(entry.exerciseName)
+                        Spacer()
+                        Text("\(entry.plannedSets)x\(entry.plannedReps) @ \(WeightMath.displayWeightFromKg(entry.plannedWeightKg, unit: unit))")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
+                if let reason = rx.blockedReason {
+                    Text(reason).foregroundStyle(.orange)
+                }
+            } else if store.hasPendingWorkoutUploads {
+                Text("Your next workout will appear once the last one has uploaded.")
+                    .foregroundStyle(.secondary)
+            } else if store.noActivePlan {
                 Text("No active plan. Pick one in Settings → Plans, or build one on web.")
                     .foregroundStyle(.secondary)
             }
+
+            Button("Start workout") {
+                Task { await model.startWorkout(api: api, store: store) }
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(model.loading || store.cachedPrescription?.blockedReason != nil)
         }
     }
+
+    // MARK: Heart rate
 
     private var heartRatePanel: some View {
         HStack(alignment: .center, spacing: 12) {
@@ -378,66 +522,43 @@ struct WorkoutView: View {
         return heartRate.samples.filter { $0.timestamp >= cutoff }
     }
 
-    private func restTargetSeconds(for pending: WorkoutViewModel.PendingSet) -> Int {
-        let fromProtocol: Int
-        switch pending.entry.progressionProtocol {
-        case .gzclpT1: fromProtocol = 180
-        case .gzclpT2: fromProtocol = 120
-        case .gzclpT3, .basic: fromProtocol = 90
-        }
-        let backendValue = pending.entry.expectedRestSeconds
-        return max(backendValue, fromProtocol)
+    // MARK: Timer
+
+    private func timerColor(restTarget: Int) -> Color {
+        let elapsed = model.restSeconds(store: store)
+        if elapsed > restTarget { return .red }
+        if elapsed >= max(0, restTarget - 15) { return .orange }
+        return .green
     }
 
-    private func restState(for pending: WorkoutViewModel.PendingSet) -> String {
-        let expected = restTargetSeconds(for: pending)
-        if model.timerSeconds > expected { return "over" }
-        if model.timerSeconds >= max(0, expected - 15) { return "warn" }
-        return "ok"
-    }
-
-    private func timerColor(for pending: WorkoutViewModel.PendingSet) -> Color {
-        switch restState(for: pending) {
-        case "over": return .red
-        case "warn": return .orange
-        default: return .green
-        }
-    }
-
-    private func timerPanel(for pending: WorkoutViewModel.PendingSet) -> some View {
-        let expected = restTargetSeconds(for: pending)
-        let mins = expected / 60
-        let secs = expected % 60
-        let target = "\(String(format: "%02d", mins)):\(String(format: "%02d", secs))"
-
+    private func timerPanel(restTarget: Int) -> some View {
+        let color = timerColor(restTarget: restTarget)
         return VStack(spacing: 6) {
-            SegmentedDigitalClock(text: formatTimer(model.timerSeconds), color: timerColor(for: pending))
+            SegmentedDigitalClock(text: formatTimer(model.restSeconds(store: store)), color: color)
                 .frame(maxWidth: .infinity)
                 .padding(.vertical, 13)
                 .background(Color.black, in: RoundedRectangle(cornerRadius: 14))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14)
-                        .stroke(timerColor(for: pending).opacity(0.55), lineWidth: 2)
+                        .stroke(color.opacity(0.55), lineWidth: 2)
                 )
-            Text("Rest target \(target)")
+            Text("Rest target \(formatTimer(restTarget))")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         }
     }
 
-    private func outcomeSelector(for pending: WorkoutViewModel.PendingSet) -> some View {
+    private func outcomeSelector(targetReps: Int, isAmrap: Bool) -> some View {
         HStack(spacing: 10) {
             Button("Complete") {
-                if pending.setItem.isAmrap {
+                if isAmrap {
                     repsEntryMode = .success
-                    repsEntryTarget = pending.targetReps
+                    repsEntryTarget = targetReps
                     repsEntryIsAmrap = true
-                    repsEntryValue = "\(pending.targetReps)"
+                    repsEntryValue = "\(targetReps)"
                     showingRepsEntry = true
                 } else {
-                    Task {
-                        await model.submitCurrentSet(using: api, mode: .success, repsOverride: nil)
-                    }
+                    model.submitCurrentSet(store: store, mode: .success, repsOverride: nil)
                 }
             }
             .buttonStyle(.borderedProminent)
@@ -445,9 +566,9 @@ struct WorkoutView: View {
 
             Button("Fail") {
                 repsEntryMode = .failed
-                repsEntryTarget = pending.targetReps
-                repsEntryIsAmrap = pending.setItem.isAmrap
-                repsEntryValue = "\(max(0, pending.targetReps - 1))"
+                repsEntryTarget = targetReps
+                repsEntryIsAmrap = isAmrap
+                repsEntryValue = "\(max(0, targetReps - 1))"
                 showingRepsEntry = true
             }
             .buttonStyle(.bordered)

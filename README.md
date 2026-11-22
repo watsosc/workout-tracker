@@ -19,7 +19,12 @@ A **cost-first, single-user workout tracker** built for fast iteration and near-
 - Per-set persistence (every set save is immediate)
 - Success/fail actions per set
 - AMRAP-aware flow (`X+ reps`), custom in-app AMRAP prompt
-- Auto-finish when all sets are complete
+- Undo the last logged set; after the final set you confirm **Finish** (so mistakes can still be fixed)
+- Exit menu: finish early (applies progression) or **discard** the workout (no progression, plan doesn't advance)
+- Warm-up ramp (bar → ~40/60/80%) and plates-per-side for barbell lifts (lb: 45 bar, kg: 20 bar)
+- Personal records (heaviest weight, estimated 1RM) shown when a workout finishes and in History
+- iOS: rest-over notifications, and **offline logging** — workouts are recorded on the phone and
+  uploaded when there's signal (see `ios/README.md`)
 
 ### Plan management
 - Create plan (GZCLP template or custom)
@@ -176,10 +181,12 @@ npm run check
 npm run build
 ```
 
-Backend syntax sanity check:
+Backend tests:
 
 ```bash
-python -m py_compile backend/app/schema.py
+cd backend
+pip install '.[dev]'
+python -m pytest
 ```
 
 ---
@@ -264,10 +271,28 @@ GraphQL examples live in:
 
 ---
 
+## Sign-in
+
+The API is open until you set a login, then every request needs a session:
+
+```bash
+cd backend
+python -m app.manage set-password          # prompts for username + password
+python -m app.manage sign-out-everywhere   # revoke all sessions (e.g. lost phone)
+python -m app.manage disable-login         # back to no login
+```
+
+- Web: `/login` form; the server sets an HttpOnly session cookie.
+- iOS: a sign-in sheet appears when needed; the session token is kept in the Keychain.
+- Passwords are stored as scrypt hashes; sessions expire after 180 days unused; 5 failed attempts
+  from one address lock it out for 15 minutes.
+- The backend logs a warning at startup while no password is set.
+
+---
+
 ## Current constraints / assumptions
 
-- Single-user app (no auth yet)
-- No multi-tenant API controls yet (don’t expose publicly without basic protection)
+- Single-user app: one username/password login (see **Sign-in** below), not per-user accounts
 - SQLite is intentional for MVP cost; Postgres migration can come with multi-user rollout
 
 ---
