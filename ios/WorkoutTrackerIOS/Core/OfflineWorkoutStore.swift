@@ -136,6 +136,10 @@ struct LocalWorkout: Codable, Identifiable, Hashable {
 
     var id: String { clientId }
 
+    /// What the rest clock counts from. Nil before the first set: there's no rest to time until a
+    /// set has been logged.
+    var restStart: Date? { lastSetCompletedAt }
+
     struct SetPosition: Hashable {
         let entryIndex: Int
         let setIndex: Int
@@ -409,7 +413,7 @@ final class OfflineWorkoutStore: ObservableObject {
 
     func completeSet(at position: LocalWorkout.SetPosition, reps: Int, now: Date = Date()) {
         guard var workout = activeWorkout else { return }
-        let restStart = workout.lastSetCompletedAt ?? workout.startedAt
+        let restStart = workout.restStart ?? workout.startedAt
         workout.entries[position.entryIndex].sets[position.setIndex].repsCompleted = max(0, reps)
         workout.entries[position.entryIndex].sets[position.setIndex].durationSeconds = max(0, Int(now.timeIntervalSince(restStart)))
         workout.entries[position.entryIndex].sets[position.setIndex].completedAt = now

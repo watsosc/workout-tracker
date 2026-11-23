@@ -30,6 +30,7 @@ struct WorkoutTrackerIOSApp: App {
                         .environmentObject(settings)
                         .environmentObject(workoutStore)
                         .interactiveDismissDisabled()
+                        .neonSheet()
                 }
                 .task { await settings.checkAuthStatus() }
                 // Mirror the workout onto the lock screen / Dynamic Island from any tab.

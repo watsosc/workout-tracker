@@ -252,6 +252,7 @@ struct SettingsView: View {
                 }
             }
             .neonForm()
+            .neonTabBarClearance()
             .navigationTitle("SETTINGS")
             .task { await model.load(using: api, unit: settings.weightUnit) }
             .onChange(of: settings.weightUnit) {

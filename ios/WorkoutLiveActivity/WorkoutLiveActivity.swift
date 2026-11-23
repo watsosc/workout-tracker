@@ -101,7 +101,8 @@ private struct LockScreenView: View {
     }
 }
 
-/// Counts down to the rest target; "GO" once reached (the activity goes stale then).
+/// Counts down to the rest target; "GO" once reached (the activity goes stale then). Idle at
+/// 00:00 before the first set.
 private struct RestTimerText: View {
     let state: WorkoutActivityAttributes.ContentState
     let isStale: Bool
@@ -117,7 +118,10 @@ private struct RestTimerText: View {
         } else if state.restEndsAt != nil {
             Text("GO").foregroundStyle(Neon.pink)
         } else {
-            Text("READY").foregroundStyle(Neon.clockGreen)
+            // Before the first set the rest clock is idle, like the in-app clock.
+            Text("00:00")
+                .monospacedDigit()
+                .foregroundStyle(Neon.clockGreen.opacity(0.4))
         }
     }
 }

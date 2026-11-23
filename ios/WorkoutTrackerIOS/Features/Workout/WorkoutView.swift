@@ -109,11 +109,13 @@ final class WorkoutViewModel: ObservableObject {
 
     func restSeconds(store: OfflineWorkoutStore) -> Int {
         guard let workout = store.activeWorkout else { return 0 }
-        return max(0, Int(now.timeIntervalSince(workout.lastSetCompletedAt ?? workout.startedAt)))
+        guard let start = workout.restStart else { return 0 }
+        return max(0, Int(now.timeIntervalSince(start)))
     }
 
     func startTicking() {
         guard tickTask == nil else { return }
+        now = Date()
         tickTask = Task { [weak self] in
             while !Task.isCancelled {
                 self?.now = Date()
@@ -161,6 +163,7 @@ struct WorkoutView: View {
     @State private var weightEntry: WeightEntry?
     @State private var showingAddExercise = false
     @State private var swapEntryIndex: Int?
+    @State private var optionsEntryIndex: Int?
     @State private var swapName = ""
     @State private var showingEmptyWorkoutName = false
     @State private var emptyWorkoutName = "Workout"
@@ -209,6 +212,7 @@ struct WorkoutView: View {
                 .padding(.bottom, 24)
             }
             .scrollIndicators(.hidden)
+            .neonTabBarClearance()
             .background(NeonBackground())
             .toolbar(.hidden, for: .navigationBar)
             .task {
@@ -218,12 +222,15 @@ struct WorkoutView: View {
             .onChange(of: store.activeWorkout?.clientId) {
                 syncHeartRateAndTicker()
             }
-            .confirmationDialog("Discard this workout?", isPresented: $confirmingDiscard, titleVisibility: .visible) {
-                Button("Discard workout", role: .destructive) { model.discardWorkout(store: store) }
-                Button("Keep going", role: .cancel) {}
-            } message: {
-                Text("Logged sets are thrown away and the plan does not advance.")
-            }
+            .neonDialog(
+                "Discard this workout?",
+                isPresented: $confirmingDiscard,
+                message: "Logged sets are thrown away and the plan does not advance.",
+                buttons: [
+                    NeonDialogButton(title: "Discard workout", kind: .danger) { model.discardWorkout(store: store) },
+                    .cancel("Keep going")
+                ]
+            )
             .sheet(item: $weightEntry) { entry in
                 WeightEntrySheet(
                     title: entry.exerciseName,
@@ -236,6 +243,7 @@ struct WorkoutView: View {
                     }
                 )
                 .presentationDetents([.height(260)])
+                .neonSheet()
             }
             .sheet(isPresented: $showingAddExercise) {
                 AddExerciseSheet(unit: unit, suggestions: store.exerciseNames) { name, sets, reps, weight in
@@ -244,31 +252,44 @@ struct WorkoutView: View {
                 } onCancel: {
                     showingAddExercise = false
                 }
+                .neonSheet()
             }
-            .alert("Swap exercise", isPresented: Binding(
-                get: { swapEntryIndex != nil },
-                set: { if !$0 { swapEntryIndex = nil } }
-            )) {
-                TextField("Exercise name", text: $swapName)
-                Button("Swap") {
-                    if let index = swapEntryIndex { store.swapExercise(entryIndex: index, to: swapName) }
-                    swapEntryIndex = nil
+            .neonDialog(
+                item: $optionsEntryIndex,
+                title: { index in store.activeWorkout?.entries[safe: index]?.exerciseName ?? "Exercise" },
+                buttons: { index in exerciseOptions(index) }
+            )
+            .neonDialog(
+                item: $swapEntryIndex,
+                title: { _ in "Swap exercise" },
+                message: { _ in "Swapped exercises are logged but don't change the plan's progression." },
+                text: $swapName,
+                placeholder: "Exercise name",
+                buttons: { index in
+                    [
+                        NeonDialogButton(title: "Swap", kind: .primary) {
+                            let name = swapName.trimmingCharacters(in: .whitespaces)
+                            if !name.isEmpty { store.swapExercise(entryIndex: index, to: name) }
+                        },
+                        .cancel()
+                    ]
                 }
-                Button("Cancel", role: .cancel) { swapEntryIndex = nil }
-            } message: {
-                Text("Swapped exercises are logged but don't change the plan's progression.")
-            }
-            .alert("Empty workout", isPresented: $showingEmptyWorkoutName) {
-                TextField("Name", text: $emptyWorkoutName)
-                Button("Start") {
-                    RestTimerNotifier.shared.requestAuthorizationIfNeeded()
-                    store.startEmptyWorkout(name: emptyWorkoutName)
-                    showingAddExercise = true
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                Text("Not part of your plan. Add exercises as you go.")
-            }
+            )
+            .neonDialog(
+                "Empty workout",
+                isPresented: $showingEmptyWorkoutName,
+                message: "Not part of your plan. Add exercises as you go.",
+                text: $emptyWorkoutName,
+                placeholder: "Name",
+                buttons: [
+                    NeonDialogButton(title: "Start", kind: .primary) {
+                        RestTimerNotifier.shared.requestAuthorizationIfNeeded()
+                        store.startEmptyWorkout(name: emptyWorkoutName)
+                        showingAddExercise = true
+                    },
+                    .cancel()
+                ]
+            )
             .sheet(isPresented: $showingRepsEntry) {
                 RepsEntrySheet(
                     value: $repsEntryValue,
@@ -288,6 +309,7 @@ struct WorkoutView: View {
                     }
                 )
                 .presentationDetents([.height(230)])
+                .neonSheet()
             }
         }
     }
@@ -592,17 +614,8 @@ struct WorkoutView: View {
                     .foregroundStyle(Neon.muted)
             }
             Spacer()
-            Menu {
-                if entry.isSkipped {
-                    Button("Unskip") { store.unskipExercise(entryIndex: index) }
-                } else if !entry.isDone {
-                    Button("Skip exercise") { store.skipExercise(entryIndex: index) }
-                }
-                Button("Swap exercise…") {
-                    swapName = ""
-                    swapEntryIndex = index
-                }
-                Button("Add a set") { store.addSet(entryIndex: index) }
+            Button {
+                optionsEntryIndex = index
             } label: {
                 Text("•••")
                     .font(Neon.mono(16))
@@ -611,6 +624,7 @@ struct WorkoutView: View {
                     .padding(.vertical, 6)
                     .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
             .accessibilityLabel("Options for \(entry.exerciseName)")
         }
         .padding(.leading, 12)
@@ -623,6 +637,23 @@ struct WorkoutView: View {
                 .frame(width: 3)
         }
         .opacity(entry.isSkipped ? 0.5 : 1)
+    }
+
+    private func exerciseOptions(_ index: Int) -> [NeonDialogButton] {
+        guard let entry = store.activeWorkout?.entries[safe: index] else { return [.cancel()] }
+        var buttons: [NeonDialogButton] = []
+        if entry.isSkipped {
+            buttons.append(NeonDialogButton(title: "Unskip") { store.unskipExercise(entryIndex: index) })
+        } else if !entry.isDone {
+            buttons.append(NeonDialogButton(title: "Skip exercise", kind: .danger) { store.skipExercise(entryIndex: index) })
+        }
+        buttons.append(NeonDialogButton(title: "Swap exercise…") {
+            swapName = ""
+            swapEntryIndex = index
+        })
+        buttons.append(NeonDialogButton(title: "Add a set") { store.addSet(entryIndex: index) })
+        buttons.append(.cancel())
+        return buttons
     }
 
     private func entryStatusText(_ entry: LocalEntry) -> String {
@@ -745,10 +776,25 @@ struct WorkoutView: View {
                     .chartYScale(domain: 70...145)
                     .shadow(color: Neon.pink.opacity(0.8), radius: 4)
                 } else {
-                    Text("WAITING FOR HEART-RATE STREAM…")
-                        .font(Neon.mono(11, relativeTo: .caption))
-                        .foregroundStyle(Neon.muted)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    VStack(spacing: 4) {
+                        Text(heartRate.statusText.uppercased())
+                            .font(Neon.mono(11, relativeTo: .caption))
+                            .foregroundStyle(Neon.muted)
+                            .multilineTextAlignment(.center)
+                        if heartRate.isHeartRateDeviceConnected {
+                            Text("START AN ACTIVITY WITH HR BROADCAST ON THE WATCH")
+                                .font(Neon.mono(10, relativeTo: .caption2))
+                                .tracking(1)
+                                .foregroundStyle(Neon.cyan)
+                                .multilineTextAlignment(.center)
+                        } else {
+                            Text("TAP TO RETRY")
+                                .font(Neon.mono(10, relativeTo: .caption2))
+                                .tracking(1.2)
+                                .foregroundStyle(Neon.cyan)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
             }
             .frame(maxWidth: .infinity)
@@ -770,6 +816,12 @@ struct WorkoutView: View {
         .padding(.vertical, 8)
         .background(Color.black)
         .overlay(alignment: .leading) { Rectangle().fill(Neon.pink).frame(width: 3) }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            // Only when nothing is connected: a connected sensor that's quiet just needs broadcasting on.
+            if !heartRate.isHeartRateDeviceConnected { heartRate.reconnect() }
+        }
+        .accessibilityHint(heartRate.isHeartRateDeviceConnected ? "" : "Retries connecting to the heart-rate monitor")
     }
 
     private var recentHeartRateSamples: [LiveHeartRateSample] {
@@ -788,20 +840,32 @@ struct WorkoutView: View {
     }
 
     private func timerPanel(restTarget: Int) -> some View {
-        let color = timerColor(restTarget: restTarget)
+        // Idle (dimmed, 00:00) until the first set is logged: there's no rest to time before that.
+        let idle = store.activeWorkout?.restStart == nil
+        let color = idle ? Color.green.opacity(0.35) : timerColor(restTarget: restTarget)
         return VStack(spacing: 6) {
-            SegmentedDigitalClock(text: formatTimer(model.restSeconds(store: store)), color: color)
-                .frame(maxWidth: .infinity)
-                .padding(.vertical, 13)
-                .background(Color.black, in: RoundedRectangle(cornerRadius: 14))
-                .overlay(
-                    RoundedRectangle(cornerRadius: 14)
-                        .stroke(color.opacity(0.55), lineWidth: 2)
-                )
-            Text("REST TARGET \(Text(verbatim: formatTimer(restTarget)).foregroundStyle(Neon.white))")
-                .font(Neon.mono(12, relativeTo: .caption))
-                .tracking(1.6)
-                .foregroundStyle(Neon.muted)
+            VHSGlitch(active: !idle) {
+                SegmentedDigitalClock(text: formatTimer(model.restSeconds(store: store)), color: color)
+            }
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 13)
+            .background(Color.black)
+            .overlay(VHSScanlines(tint: color))
+            .clipShape(RoundedRectangle(cornerRadius: 14))
+            .overlay(
+                RoundedRectangle(cornerRadius: 14)
+                    .stroke(color.opacity(0.55), lineWidth: 2)
+            )
+            Group {
+                if idle {
+                    Text("REST CLOCK STARTS WHEN YOU COMPLETE A SET")
+                } else {
+                    Text("REST TARGET \(Text(verbatim: formatTimer(restTarget)).foregroundStyle(Neon.white))")
+                }
+            }
+            .font(Neon.mono(12, relativeTo: .caption))
+            .tracking(1.6)
+            .foregroundStyle(Neon.muted)
         }
     }
 
@@ -870,6 +934,151 @@ private struct SegmentedDigitalClock: View {
                 }
             }
         }
+    }
+}
+
+// MARK: VHS effect on the rest clock
+
+/// Static scanlines plus a faint tracking band that slowly rolls down the screen.
+private struct VHSScanlines: View {
+    let tint: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            Canvas { context, size in
+                var y: CGFloat = 0
+                while y < size.height {
+                    context.fill(Path(CGRect(x: 0, y: y, width: size.width, height: 1.2)), with: .color(.black.opacity(0.45)))
+                    y += 3
+                }
+            }
+
+            if !reduceMotion {
+                TimelineView(.animation(minimumInterval: 1 / 30)) { timeline in
+                    GeometryReader { geo in
+                        let period = 5.5
+                        let phase = timeline.date.timeIntervalSinceReferenceDate.truncatingRemainder(dividingBy: period) / period
+                        let bandHeight: CGFloat = 26
+                        LinearGradient(
+                            colors: [.clear, tint.opacity(0.10), .white.opacity(0.07), tint.opacity(0.10), .clear],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                        .frame(height: bandHeight)
+                        .offset(y: -bandHeight + (geo.size.height + bandHeight) * phase)
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+private struct GlitchSlice {
+    var y: CGFloat      // 0...1 of height
+    var height: CGFloat // 0...1 of height
+    var dx: CGFloat
+}
+
+private struct GlitchFrame {
+    var split: CGFloat = 0
+    var jitter: CGFloat = 0
+    var slices: [GlitchSlice] = []
+    static let none = GlitchFrame()
+}
+
+/// Wraps content and, at random intervals, hits it with a short glitch burst: RGB split,
+/// horizontal tearing slices and jitter.
+private struct VHSGlitch<Content: View>: View {
+    var active = true
+    @ViewBuilder let content: Content
+
+    @State private var frame = GlitchFrame.none
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        ZStack {
+            if frame.split != 0 {
+                content
+                    .colorMultiply(Neon.pink)
+                    .offset(x: -frame.split)
+                    .opacity(0.75)
+                    .blendMode(.screen)
+                content
+                    .colorMultiply(Neon.cyan)
+                    .offset(x: frame.split)
+                    .opacity(0.75)
+                    .blendMode(.screen)
+            }
+
+            content
+                .offset(x: frame.jitter)
+                .mask {
+                    // Cut the torn slices out of the base copy...
+                    GeometryReader { geo in
+                        ZStack {
+                            Rectangle()
+                            ForEach(Array(frame.slices.enumerated()), id: \.offset) { _, slice in
+                                Rectangle()
+                                    .frame(height: geo.size.height * slice.height)
+                                    .position(x: geo.size.width / 2, y: geo.size.height * (slice.y + slice.height / 2))
+                                    .blendMode(.destinationOut)
+                            }
+                        }
+                        .compositingGroup()
+                    }
+                }
+
+            // ...and draw them shifted sideways.
+            ForEach(Array(frame.slices.enumerated()), id: \.offset) { _, slice in
+                content
+                    .offset(x: frame.jitter + slice.dx)
+                    .mask {
+                        GeometryReader { geo in
+                            Rectangle()
+                                .frame(height: geo.size.height * slice.height)
+                                .position(x: geo.size.width / 2, y: geo.size.height * (slice.y + slice.height / 2))
+                        }
+                    }
+            }
+        }
+        .task(id: active && !reduceMotion) {
+            guard active, !reduceMotion else {
+                frame = .none
+                return
+            }
+            await runGlitches()
+        }
+    }
+
+    private func runGlitches() async {
+        while !Task.isCancelled {
+            try? await Task.sleep(for: .seconds(Double.random(in: 2.5...8)))
+            guard !Task.isCancelled else { break }
+            // A burst is a few quick random frames.
+            for _ in 0..<Int.random(in: 2...5) {
+                frame = Self.randomFrame()
+                try? await Task.sleep(for: .milliseconds(Int.random(in: 35...90)))
+            }
+            frame = .none
+        }
+        frame = .none
+    }
+
+    private static func randomFrame() -> GlitchFrame {
+        var frame = GlitchFrame()
+        frame.split = CGFloat.random(in: 2...6) * (Bool.random() ? 1 : -1)
+        frame.jitter = CGFloat.random(in: -3...3)
+        frame.slices = (0..<Int.random(in: 1...3)).map { _ in
+            GlitchSlice(
+                y: CGFloat.random(in: 0...0.85),
+                height: CGFloat.random(in: 0.04...0.16),
+                dx: CGFloat.random(in: 6...18) * (Bool.random() ? 1 : -1)
+            )
+        }
+        return frame
     }
 }
 
@@ -953,11 +1162,13 @@ private struct RepsEntrySheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel", action: onCancel)
+                    NeonToolbarButton(title: "Cancel", color: Neon.muted, action: onCancel)
                 }
+                .neonToolbarItem()
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save", action: onSubmit).bold()
+                    NeonToolbarButton(title: "Save", action: onSubmit)
                 }
+                .neonToolbarItem()
             }
         }
     }
@@ -1002,13 +1213,16 @@ private struct WeightEntrySheet: View {
             .navigationTitle("CHANGE WEIGHT")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .cancellationAction) {
+                    NeonToolbarButton(title: "Cancel", color: Neon.muted, action: onCancel)
+                }
+                .neonToolbarItem()
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") {
+                    NeonToolbarButton(title: "Save") {
                         if let weight = Double(value.replacingOccurrences(of: ",", with: ".")), weight >= 0 { onSave(weight) }
                     }
-                    .bold()
                 }
+                .neonToolbarItem()
             }
         }
     }
@@ -1076,16 +1290,25 @@ private struct AddExerciseSheet: View {
             .navigationTitle("ADD EXERCISE")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: onCancel) }
+                ToolbarItem(placement: .cancellationAction) {
+                    NeonToolbarButton(title: "Cancel", color: Neon.muted, action: onCancel)
+                }
+                .neonToolbarItem()
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Add") {
+                    NeonToolbarButton(title: "Add") {
                         let value = Double(weight.replacingOccurrences(of: ",", with: ".")) ?? 0
                         onAdd(name, sets, reps, max(0, value))
                     }
-                    .bold()
                     .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
+                .neonToolbarItem()
             }
         }
+    }
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }

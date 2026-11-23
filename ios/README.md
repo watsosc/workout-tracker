@@ -16,6 +16,9 @@ This is a native iOS frontend for the existing workout backend.
   - live chart (left)
   - latest BPM text (right)
   - Bluetooth status icon bottom-right (gray + slash when not receiving, blue when receiving)
+  - Garmin watches only send heart rate while broadcasting: turn on **Broadcast Heart Rate** for the
+    activity profile you use (e.g. Strength) and start that activity on the watch. A watch already
+    paired with the phone is picked up through its existing connection, no scan needed.
 
 ## Offline logging
 

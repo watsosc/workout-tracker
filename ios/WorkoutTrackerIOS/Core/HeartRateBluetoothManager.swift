@@ -1,5 +1,6 @@
 import Foundation
 import CoreBluetooth
+import UIKit
 
 struct LiveHeartRateSample: Identifiable {
     let id = UUID()
@@ -14,7 +15,16 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     @Published private(set) var isReceivingData = false
     /// A device exposing the Heart Rate service is connected and subscribed (or the mock stream is on).
     @Published private(set) var isHeartRateDeviceConnected = false
-    @Published private(set) var statusText = "Disconnected"
+    @Published private(set) var statusText = "Disconnected" {
+        didSet { if statusText != oldValue { Self.log("status: \(statusText)") } }
+    }
+
+    /// Devices already logged during this scan (diagnostics only).
+    private var loggedDevices: Set<UUID> = []
+
+    nonisolated static func log(_ message: String) {
+        print("[HR] \(Date().formatted(.iso8601.time(includingFractionalSeconds: true))) \(message)")
+    }
 
     private var central: CBCentralManager?
     private var peripheral: CBPeripheral?
@@ -24,7 +34,10 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
     private var onSample: (@MainActor (Int, Date) -> Void)?
     private var isActive = false
     private var receiveExpiryTask: Task<Void, Never>?
+    private var connectTimeoutTask: Task<Void, Never>?
     private var mockTask: Task<Void, Never>?
+    /// Sensors that failed or timed out on connect; skipped for a while so another can be tried.
+    private var recentlyFailed: [UUID: Date] = [:]
 
     private let heartRateServiceUUID = CBUUID(string: "180D")
     private let heartRateMeasurementUUID = CBUUID(string: "2A37")
@@ -53,9 +66,14 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
         onSample = nil
         receiveExpiryTask?.cancel()
         receiveExpiryTask = nil
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
         mockTask?.cancel()
         mockTask = nil
 
+        if central?.state == .poweredOn {
+            central?.stopScan()
+        }
         if let peripheral {
             central?.cancelPeripheralConnection(peripheral)
         }
@@ -105,20 +123,93 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
             try? await Task.sleep(for: .seconds(5))
             guard !Task.isCancelled else { return }
             isReceivingData = false
-            statusText = "Connected (no recent samples)"
+            statusText = "Connected, no recent data"
         }
+    }
+
+    /// Drops the current sensor (if any) and looks for one again. Used by the "retry" tap.
+    func reconnect() {
+        guard isActive, !shouldUseMockHeartRate else { return }
+        Self.log("manual retry")
+        recentlyFailed.removeAll()
+        if let peripheral {
+            central?.cancelPeripheralConnection(peripheral)
+        }
+        resetPeripheral()
+        startScanningIfReady()
+    }
+
+    private func resetPeripheral() {
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = nil
+        peripheral = nil
+        heartRateCharacteristic = nil
+        isHeartRateDeviceConnected = false
+        isReceivingData = false
     }
 
     private func startScanningIfReady() {
         guard let central else { return }
-        guard isActive else { return }
+        guard isActive, peripheral == nil else { return }
         guard central.state == .poweredOn else {
-            statusText = "Bluetooth unavailable"
+            statusText = bluetoothStateText(central.state)
             return
         }
 
-        statusText = "Scanning for Garmin/HR sensor"
-        central.scanForPeripherals(withServices: [heartRateServiceUUID], options: [CBCentralManagerScanOptionAllowDuplicatesKey: true])
+        // A sensor already connected to the phone (paired in iOS Settings, or held by another app
+        // such as Garmin Connect) stops advertising, so scanning alone never finds it.
+        let connected = central.retrieveConnectedPeripherals(withServices: [heartRateServiceUUID])
+        if let existing = connected.first(where: { !isRecentlyFailed($0) }) ?? connected.first {
+            connect(to: existing)
+            return
+        }
+
+        Self.log("connected HR peripherals from system: \(connected.map { $0.name ?? $0.identifier.uuidString })")
+        statusText = "Scanning for heart-rate sensor"
+        loggedDevices.removeAll()
+        // In the foreground scan everything and match on the advertised Heart Rate service ourselves
+        // (also logs what's nearby). Background scans must name a service.
+        let foreground = UIApplication.shared.applicationState == .active
+        central.scanForPeripherals(
+            withServices: foreground ? nil : [heartRateServiceUUID],
+            options: [CBCentralManagerScanOptionAllowDuplicatesKey: true]
+        )
+    }
+
+    private func connect(to peripheral: CBPeripheral) {
+        guard let central else { return }
+        self.peripheral = peripheral
+        peripheral.delegate = self
+        statusText = "Connecting to \(peripheral.name ?? "HR sensor")"
+        if central.isScanning { central.stopScan() }
+        central.connect(peripheral)
+
+        connectTimeoutTask?.cancel()
+        connectTimeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(12))
+            guard !Task.isCancelled, let self, self.peripheral === peripheral, !self.isHeartRateDeviceConnected else { return }
+            self.recentlyFailed[peripheral.identifier] = Date()
+            self.central?.cancelPeripheralConnection(peripheral)
+            self.resetPeripheral()
+            self.statusText = "Couldn't connect to \(peripheral.name ?? "HR sensor"), retrying"
+            self.startScanningIfReady()
+        }
+    }
+
+    private func isRecentlyFailed(_ peripheral: CBPeripheral) -> Bool {
+        guard let failedAt = recentlyFailed[peripheral.identifier] else { return false }
+        return Date().timeIntervalSince(failedAt) < 30
+    }
+
+    private func bluetoothStateText(_ state: CBManagerState) -> String {
+        switch state {
+        case .poweredOn: return "Bluetooth ready"
+        case .poweredOff: return "Bluetooth is off"
+        case .unauthorized: return "Bluetooth permission denied. Allow it in Settings"
+        case .unsupported: return "Bluetooth unsupported"
+        case .resetting: return "Bluetooth resetting"
+        default: return "Bluetooth unavailable"
+        }
     }
 
     private func enqueueSample(_ bpm: Int, at date: Date) {
@@ -150,30 +241,27 @@ final class HeartRateBluetoothManager: NSObject, ObservableObject {
 extension HeartRateBluetoothManager: CBCentralManagerDelegate {
     nonisolated func centralManagerDidUpdateState(_ central: CBCentralManager) {
         Task { @MainActor in
-            switch central.state {
-            case .poweredOn:
-                statusText = "Bluetooth ready"
+            statusText = bluetoothStateText(central.state)
+            if central.state == .poweredOn {
                 startScanningIfReady()
-            case .poweredOff:
-                statusText = "Bluetooth is off"
-            case .unauthorized:
-                statusText = "Bluetooth permission denied"
-            case .unsupported:
-                statusText = "Bluetooth unsupported"
-            default:
-                statusText = "Bluetooth unavailable"
+            } else {
+                // Connections are gone when Bluetooth goes off; start over when it comes back.
+                resetPeripheral()
             }
         }
     }
 
     nonisolated func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String : Any], rssi RSSI: NSNumber) {
+        let services = (advertisementData[CBAdvertisementDataServiceUUIDsKey] as? [CBUUID] ?? [])
+            + (advertisementData[CBAdvertisementDataOverflowServiceUUIDsKey] as? [CBUUID] ?? [])
+        let name = (advertisementData[CBAdvertisementDataLocalNameKey] as? String) ?? peripheral.name
         Task { @MainActor in
-            guard self.peripheral == nil else { return }
-            self.peripheral = peripheral
-            peripheral.delegate = self
-            statusText = "Connecting to \(peripheral.name ?? "HR sensor")"
-            central.stopScan()
-            central.connect(peripheral)
+            if services.contains(heartRateServiceUUID), loggedDevices.insert(peripheral.identifier).inserted {
+                Self.log("found HR sensor: \(name ?? "?") rssi=\(RSSI)")
+            }
+            guard services.contains(heartRateServiceUUID) else { return }
+            guard isActive, self.peripheral == nil, !isRecentlyFailed(peripheral) else { return }
+            connect(to: peripheral)
         }
     }
 
@@ -184,13 +272,24 @@ extension HeartRateBluetoothManager: CBCentralManagerDelegate {
         }
     }
 
+    nonisolated func centralManager(_ central: CBCentralManager, didFailToConnect peripheral: CBPeripheral, error: Error?) {
+        Task { @MainActor in
+            guard self.peripheral === peripheral else { return }
+            Self.log("didFailToConnect \(peripheral.name ?? "?"): \(error?.localizedDescription ?? "no error")")
+            recentlyFailed[peripheral.identifier] = Date()
+            resetPeripheral()
+            statusText = "Couldn't connect to \(peripheral.name ?? "HR sensor"), retrying"
+            startScanningIfReady()
+        }
+    }
+
     nonisolated func centralManager(_ central: CBCentralManager, didDisconnectPeripheral peripheral: CBPeripheral, error: Error?) {
         Task { @MainActor in
-            self.peripheral = nil
-            self.heartRateCharacteristic = nil
-            isHeartRateDeviceConnected = false
-            isReceivingData = false
-            statusText = "Disconnected, scanning..."
+            Self.log("didDisconnect \(peripheral.name ?? "?"): \(error?.localizedDescription ?? "no error")")
+            guard self.peripheral === peripheral else { return }
+            resetPeripheral()
+            guard isActive else { return }
+            statusText = "Disconnected, scanning"
             startScanningIfReady()
         }
     }
@@ -199,6 +298,7 @@ extension HeartRateBluetoothManager: CBCentralManagerDelegate {
 extension HeartRateBluetoothManager: CBPeripheralDelegate {
     nonisolated func peripheral(_ peripheral: CBPeripheral, didDiscoverServices error: Error?) {
         Task { @MainActor in
+            Self.log("services on \(peripheral.name ?? "?") id=\(peripheral.identifier.uuidString.prefix(8)): \(peripheral.services?.map(\.uuid.uuidString) ?? []) error=\(error?.localizedDescription ?? "none")")
             guard error == nil else {
                 statusText = "Failed to discover services"
                 return
@@ -223,14 +323,23 @@ extension HeartRateBluetoothManager: CBPeripheralDelegate {
             }
             heartRateCharacteristic = characteristic
             peripheral.setNotifyValue(true, for: characteristic)
+            connectTimeoutTask?.cancel()
+            connectTimeoutTask = nil
             isHeartRateDeviceConnected = true
-            statusText = "Waiting for heart-rate data"
+            statusText = "Connected to \(peripheral.name ?? "HR sensor"), waiting for data"
         }
+    }
+
+    nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateNotificationStateFor characteristic: CBCharacteristic, error: Error?) {
+        Self.log("notify state for \(characteristic.uuid): \(characteristic.isNotifying) error=\(error?.localizedDescription ?? "none")")
     }
 
     nonisolated func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
         Task { @MainActor in
-            guard error == nil else { return }
+            guard error == nil else {
+                Self.log("value error: \(error!.localizedDescription)")
+                return
+            }
             guard characteristic.uuid == heartRateMeasurementUUID else { return }
             guard let data = characteristic.value else { return }
             guard let bpm = parseHeartRate(from: data), bpm >= 20, bpm <= 255 else { return }

@@ -129,6 +129,7 @@ struct HistoryView: View {
                 .padding(.bottom, 24)
             }
             .scrollIndicators(.hidden)
+            .neonTabBarClearance()
             .background(NeonBackground())
             .toolbar(.hidden, for: .navigationBar)
             .task { await model.load(using: api) }
@@ -142,19 +143,21 @@ struct HistoryView: View {
                     model.infoMessage = message
                     Task { await model.load(using: api) }
                 }
+                .neonSheet()
             }
-            .confirmationDialog(
-                "Delete this workout?",
-                isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }),
-                titleVisibility: .visible,
-                presenting: deleting
-            ) { item in
-                Button("Delete \(item.planWorkoutName)", role: .destructive) {
-                    Task { await model.delete(item: item, api: api) }
+            .neonDialog(
+                item: $deleting,
+                title: { _ in "Delete this workout?" },
+                message: { _ in "If it's your most recent workout, its progression is undone too. This can't be undone." },
+                buttons: { item in
+                    [
+                        NeonDialogButton(title: "Delete \(item.planWorkoutName)", kind: .danger) {
+                            Task { await model.delete(item: item, api: api) }
+                        },
+                        .cancel()
+                    ]
                 }
-            } message: { _ in
-                Text("If it's your most recent workout, its progression is undone too. This can't be undone.")
-            }
+            )
             .onChange(of: store.outbox.count) {
                 Task { await model.load(using: api) }
             }
@@ -324,10 +327,14 @@ private struct EditWorkoutSheet: View {
             .navigationTitle("EDIT WORKOUT")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { Task { await save() } }.disabled(loading)
+                ToolbarItem(placement: .cancellationAction) {
+                    NeonToolbarButton(title: "Cancel", color: Neon.muted) { dismiss() }
                 }
+                .neonToolbarItem()
+                ToolbarItem(placement: .confirmationAction) {
+                    NeonToolbarButton(title: "Save") { Task { await save() } }.disabled(loading)
+                }
+                .neonToolbarItem()
             }
             .task { await load() }
         }

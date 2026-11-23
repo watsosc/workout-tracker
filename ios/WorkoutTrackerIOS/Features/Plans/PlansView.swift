@@ -102,28 +102,26 @@ struct PlansView: View {
             }
         }
         .neonForm()
+        .neonTabBarClearance()
         .navigationTitle("PLANS")
         .overlay {
-            if model.loading && model.plans.isEmpty { ProgressView() }
+            if model.loading && model.plans.isEmpty { ProgressView().tint(Neon.yellow) }
         }
         .refreshable { await model.load(using: api) }
         .task { await model.load(using: api) }
-        .confirmationDialog(
-            "Restart plan?",
-            isPresented: Binding(
-                get: { planPendingRestart != nil },
-                set: { if !$0 { planPendingRestart = nil } }
-            ),
-            titleVisibility: .visible,
-            presenting: planPendingRestart
-        ) { plan in
-            Button("Restart & activate") {
-                Task { await model.activate(plan, using: api) }
+        .neonDialog(
+            item: $planPendingRestart,
+            title: { _ in "Restart plan?" },
+            message: { plan in "\"\(plan.name)\" was completed. It will restart from week 1." },
+            buttons: { plan in
+                [
+                    NeonDialogButton(title: "Restart & activate", kind: .primary) {
+                        Task { await model.activate(plan, using: api) }
+                    },
+                    .cancel()
+                ]
             }
-            Button("Cancel", role: .cancel) {}
-        } message: { plan in
-            Text("\"\(plan.name)\" was completed. It will restart from week 1.")
-        }
+        )
     }
 
     @ViewBuilder

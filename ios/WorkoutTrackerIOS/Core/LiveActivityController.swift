@@ -16,7 +16,7 @@ final class LiveActivityController {
     static func contentState(for workout: LocalWorkout, unit: WeightUnit) -> WorkoutActivityAttributes.ContentState {
         let completed = workout.completedSetCount
         let total = workout.totalSetCount
-        let restStart = workout.lastSetCompletedAt ?? workout.startedAt
+        let restStart = workout.restStart ?? workout.startedAt
 
         guard let position = workout.pendingSetPosition() else {
             return .init(

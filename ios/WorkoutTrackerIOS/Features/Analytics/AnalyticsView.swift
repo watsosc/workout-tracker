@@ -44,6 +44,7 @@ final class AnalyticsViewModel: ObservableObject {
 struct AnalyticsView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var model = AnalyticsViewModel()
+    @State private var choosingExercise = false
 
     private var api: WorkoutAPI { settings.api }
 
@@ -51,7 +52,7 @@ struct AnalyticsView: View {
         NavigationStack {
             List {
                 if model.loading {
-                    ProgressView()
+                    ProgressView().tint(Neon.yellow)
                 }
 
                 if !model.errorMessage.isEmpty {
@@ -84,11 +85,26 @@ struct AnalyticsView: View {
                 .neonRows()
 
                 Section {
-                    Picker("Exercise", selection: $model.selectedExerciseId) {
-                        ForEach(model.baselines) { baseline in
-                            Text(baseline.exerciseName).tag(Optional(baseline.exerciseId))
+                    Button {
+                        choosingExercise = true
+                    } label: {
+                        HStack {
+                            Text("EXERCISE")
+                                .font(Neon.mono(13, relativeTo: .footnote))
+                                .tracking(1.2)
+                                .foregroundStyle(Neon.muted)
+                            Spacer()
+                            Text((model.baselines.first { $0.exerciseId == model.selectedExerciseId }?.exerciseName ?? "Choose").uppercased())
+                                .font(Neon.head(16, .bold))
+                                .foregroundStyle(Neon.yellow)
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.system(size: 12, weight: .semibold))
+                                .foregroundStyle(Neon.cyan)
                         }
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .disabled(model.baselines.isEmpty)
                     .onChange(of: model.selectedExerciseId) {
                         Task { await model.loadProgress(using: api) }
                     }
@@ -118,7 +134,19 @@ struct AnalyticsView: View {
                 .neonRows()
             }
             .neonForm()
+            .neonTabBarClearance()
             .navigationTitle("ANALYTICS")
+            .neonDialog(
+                "Exercise",
+                isPresented: $choosingExercise,
+                kicker: "Select",
+                buttons: model.baselines.map { baseline in
+                    NeonDialogButton(
+                        title: baseline.exerciseName,
+                        kind: baseline.exerciseId == model.selectedExerciseId ? .primary : .ghost
+                    ) { model.selectedExerciseId = baseline.exerciseId }
+                } + [.cancel()]
+            )
             .task { await model.load(using: api) }
         }
     }
